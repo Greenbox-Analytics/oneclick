@@ -7,6 +7,9 @@ uses. No AI runs, so a sheet always costs exactly the base
 docx of one sheet are two deliverables — and debited only after the file is on
 the wire. Idempotent under Idempotency-Key: the same body in the same billing
 period is charged once. Nothing is stored.
+
+The charge rides in headers — `Msanii-Credits` / `Msanii-Request-Id`, plus
+`Msanii-Replayed: true` on a replay — because the body is the document.
 """
 
 import asyncio
@@ -81,11 +84,26 @@ async def partner_split_sheet(
     safe_title = re.sub(r"[^a-zA-Z0-9._-]", "_", req.work_title)
     filename = f"Split_Sheet_{safe_title}.{req.format}"
 
+    # No LLM ran, so the charge is exactly the base and is known before the
+    # body: it rides in headers, because the body IS the document. A replay
+    # under an Idempotency-Key was charged on its first run (the debit RPC
+    # dedupes), so the headers say 0 instead of repeating the price.
+    charge, charge_meta = compute_charge(psvc.SPLIT_SHEET_ACTION, price, None, None)
+    replayed = bool(idempotency_key) and psvc.already_charged(sb, request_id)
+    billed = 0 if replayed else charge
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Content-Length": str(len(data)),
+        "Msanii-Credits": str(billed),
+        "Msanii-Request-Id": request_id,
+    }
+    if replayed:
+        headers["Msanii-Replayed"] = "true"
+
     async def deliver():
         # ONE frame: yield the file, then bill — nothing below runs for a
-        # client that is gone. No LLM ran, so the charge is exactly the base.
+        # client that is gone.
         yield data
-        charge, charge_meta = compute_charge(psvc.SPLIT_SHEET_ACTION, price, None, None)
         try:
             psvc.debit_run(
                 sb,
@@ -98,10 +116,10 @@ async def partner_split_sheet(
             )
         except Exception:
             logging.exception("partner split sheet debit failed org=%s request_id=%s", ctx.org_id, request_id)
-        analytics_capture(ctx.org_id, "partner_splitsheet_completed", {"format": req.format, "charged": charge})
+        analytics_capture(
+            ctx.org_id,
+            "partner_splitsheet_completed",
+            {"format": req.format, "charged": billed, "replayed": replayed},
+        )
 
-    return StreamingResponse(
-        deliver(),
-        media_type=MEDIA_TYPES[req.format],
-        headers={"Content-Disposition": f'attachment; filename="{filename}"', "Content-Length": str(len(data))},
-    )
+    return StreamingResponse(deliver(), media_type=MEDIA_TYPES[req.format], headers=headers)

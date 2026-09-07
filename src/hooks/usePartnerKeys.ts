@@ -20,6 +20,18 @@ export interface PartnerKey {
   created_by: string | null;
   created_by_label: string | null;
   last_used_at: string | null;
+  /** When the key was revoked; the backend drops the row 30 days after this. */
+  revoked_at: string | null;
+  folder_id: string | null;
+}
+
+/** A team's grouping of keys — a use case or project. Spend is attributed by
+ * the key's CURRENT folder, so moving a key moves its history with it. */
+export interface PartnerKeyFolder {
+  id: string;
+  org_id: string;
+  name: string;
+  created_at: string;
 }
 
 /** POST response: the stored row plus the plaintext `secret`, shown ONCE. */
@@ -35,15 +47,21 @@ export interface CreatePartnerKeyInput {
   label: string;
   /** UTC ISO string, end of the chosen local day (lib/partnerKeys.endOfLocalDayIso). */
   expires_at?: string;
+  folder_id?: string | null;
 }
 
 const keysKey = (orgId?: string) => ["orgs", orgId, "partner-keys"] as const;
 
+export interface PartnerKeysPayload {
+  keys: PartnerKey[];
+  folders: PartnerKeyFolder[];
+}
+
 export function usePartnerKeys(orgId?: string) {
   const { user } = useAuth();
-  return useQuery<{ keys: PartnerKey[] }>({
+  return useQuery<PartnerKeysPayload>({
     queryKey: keysKey(orgId),
-    queryFn: () => apiFetch<{ keys: PartnerKey[] }>(`${API_URL}/orgs/${orgId}/partner-keys`),
+    queryFn: () => apiFetch<PartnerKeysPayload>(`${API_URL}/orgs/${orgId}/partner-keys`),
     enabled: !!user?.id && !!orgId,
     staleTime: 15_000,
   });
@@ -74,6 +92,39 @@ export function useRevokePartnerKey() {
     onSuccess: (_data, { orgId }) => {
       qc.invalidateQueries({ queryKey: keysKey(orgId) });
       toast.success("Key revoked");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+}
+
+/** Idempotent on an existing name, so "New folder…" can be submitted twice. */
+export function useCreatePartnerKeyFolder() {
+  const qc = useQueryClient();
+  return useMutation<PartnerKeyFolder, Error, { orgId: string; name: string }>({
+    mutationFn: ({ orgId, name }) =>
+      apiFetch<PartnerKeyFolder>(`${API_URL}/orgs/${orgId}/partner-key-folders`, {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: (_data, { orgId }) => {
+      qc.invalidateQueries({ queryKey: keysKey(orgId) });
+    },
+  });
+}
+
+/** Spend is attributed by the key's CURRENT folder, so usage moves too. */
+export function useSetPartnerKeyFolder() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean }, Error, { orgId: string; keyId: string; folderId: string | null }>({
+    mutationFn: ({ orgId, keyId, folderId }) =>
+      apiFetch(`${API_URL}/orgs/${orgId}/partner-keys/${keyId}/folder`, {
+        method: "PUT",
+        body: JSON.stringify({ folder_id: folderId }),
+      }),
+    onSuccess: (_data, { orgId }) => {
+      qc.invalidateQueries({ queryKey: keysKey(orgId) });
+      qc.invalidateQueries({ queryKey: ["orgs", orgId, "usage"] });
+      toast.success("Key moved");
     },
     onError: (e) => toast.error(e.message),
   });

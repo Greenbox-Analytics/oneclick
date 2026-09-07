@@ -1,4 +1,5 @@
-"""Phase-2 portal: org-admin key endpoints on the PRODUCT backend."""
+"""Phase-2 portal: org-admin key endpoints on the PRODUCT backend, plus the
+Msanii-admin key/usage routes that read the same payloads."""
 
 from unittest.mock import MagicMock
 
@@ -8,6 +9,8 @@ from fastapi import HTTPException
 ORG_ID = "00000000-0000-0000-0000-0000000000aa"
 KEY_ID = "00000000-0000-0000-0000-0000000000bb"
 CHILD_ID = "00000000-0000-0000-0000-0000000000cd"
+FOLDER_ID = "00000000-0000-0000-0000-0000000000f1"
+FOLDER = {"id": FOLDER_ID, "org_id": ORG_ID, "name": "Ingest", "created_at": "2026-09-01T00:00:00+00:00"}
 
 # _first_org no longer selects partner_api_enabled — the gate reads that bit
 # with its own organizations query (see _seed_capability).
@@ -113,9 +116,12 @@ def test_archived_org_409_on_writes_200_on_reads(client, flags, monkeypatch, moc
     _seed_capability(mock_supabase, True)
     monkeypatch.setattr("partner_api.org_router.psvc.list_keys", lambda sb, org: [])
     monkeypatch.setattr("partner_api.org_router.psvc.created_by_labels", lambda sb, org, keys: {})
+    monkeypatch.setattr("partner_api.org_router.psvc.list_folders", lambda sb, org: [])
     assert client.get(f"/orgs/{ORG_ID}/partner-keys").status_code == 200
     assert client.post(f"/orgs/{ORG_ID}/partner-keys", json={"label": "x"}).status_code == 409
     assert client.delete(f"/orgs/{ORG_ID}/partner-keys/{KEY_ID}").status_code == 409
+    assert client.post(f"/orgs/{ORG_ID}/partner-key-folders", json={"name": "Ingest"}).status_code == 409
+    assert client.put(f"/orgs/{ORG_ID}/partner-keys/{KEY_ID}/folder", json={"folder_id": None}).status_code == 409
 
 
 def test_list_labels_created_by_and_never_leaks_secrets(client, flags, admin_of_live_org, monkeypatch):
@@ -149,9 +155,12 @@ def test_list_labels_created_by_and_never_leaks_secrets(client, flags, admin_of_
         "partner_api.org_router.psvc.created_by_labels",
         lambda sb, org, ks: {"u-admin": "admin@label.test"},
     )
+    monkeypatch.setattr("partner_api.org_router.psvc.list_folders", lambda sb, org: [FOLDER])
     r = client.get(f"/orgs/{ORG_ID}/partner-keys")
     assert r.status_code == 200
-    out = r.json()["keys"]
+    body = r.json()
+    assert body["folders"] == [FOLDER]
+    out = body["keys"]
     assert out[0]["created_by_label"] == "admin@label.test"
     assert out[1]["created_by_label"] is None  # creator unresolvable -> null, never a guess
     assert all("secret" not in k and "key_hash" not in k for k in out)
@@ -206,3 +215,150 @@ def test_revoke_404s_on_foreign_key_or_lost_race(client, flags, admin_of_live_or
     r = client.delete(f"/orgs/{ORG_ID}/partner-keys/{KEY_ID}")
     assert r.status_code == 200 and revoked == ["not-ours", KEY_ID]
     assert events == [("partner_key_revoked", {"org_id": ORG_ID, "via": "portal"})]
+
+
+# ---- key folders ------------------------------------------------------------
+
+
+def test_create_key_accepts_a_folder_and_422s_an_unknown_one(client, flags, admin_of_live_org, monkeypatch):
+    minted = []
+
+    def fake_mint(sb, org_id, **kw):
+        if kw.get("folder_id") == "not-ours":
+            raise ValueError("unknown folder")
+        minted.append(kw)
+        return {"id": "new", "secret": "mk_live_new"}
+
+    monkeypatch.setattr("partner_api.org_router.psvc.mint_key", fake_mint)
+    assert (
+        client.post(f"/orgs/{ORG_ID}/partner-keys", json={"label": "Prod", "folder_id": FOLDER_ID}).status_code == 200
+    )
+    assert minted[0]["folder_id"] == FOLDER_ID
+
+    r = client.post(f"/orgs/{ORG_ID}/partner-keys", json={"label": "Prod", "folder_id": "not-ours"})
+    assert r.status_code == 422 and r.json()["detail"] == {"code": "unknown_folder"}
+
+
+def test_create_folder_201_and_only_a_real_insert_is_tracked(client, flags, admin_of_live_org, monkeypatch):
+    created = [True, False]
+    monkeypatch.setattr(
+        "partner_api.org_router.psvc.create_folder",
+        lambda sb, org, name: {**FOLDER, "name": name, "created": created.pop(0)},
+    )
+    events = []
+    monkeypatch.setattr("partner_api.org_router.analytics_capture", lambda d, e, p=None: events.append((e, p)))
+
+    r = client.post(f"/orgs/{ORG_ID}/partner-key-folders", json={"name": "Ingest"})
+    assert r.status_code == 201
+    assert r.json() == FOLDER  # the transient `created` flag never ships
+    assert events == [("partner_key_folder_created", {"org_id": ORG_ID, "via": "portal"})]
+
+    # Same name again: the existing row comes back, and nothing is tracked.
+    assert client.post(f"/orgs/{ORG_ID}/partner-key-folders", json={"name": "Ingest"}).status_code == 201
+    assert len(events) == 1
+
+
+def test_create_folder_rejects_a_blank_or_oversized_name(client, flags, admin_of_live_org):
+    assert client.post(f"/orgs/{ORG_ID}/partner-key-folders", json={"name": ""}).status_code == 422
+    assert client.post(f"/orgs/{ORG_ID}/partner-key-folders", json={"name": "x" * 81}).status_code == 422
+
+
+def test_set_key_folder_ok_404_and_422(client, flags, admin_of_live_org, monkeypatch):
+    monkeypatch.setattr(
+        "partner_api.org_router.psvc.set_key_folder",
+        lambda sb, org, kid, fid: kid == KEY_ID and fid != "not-ours",
+    )
+    monkeypatch.setattr("partner_api.org_router.psvc.folder_belongs", lambda sb, org, fid: fid == FOLDER_ID)
+
+    r = client.put(f"/orgs/{ORG_ID}/partner-keys/{KEY_ID}/folder", json={"folder_id": FOLDER_ID})
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    # Unfiling is the same route with a null body.
+    assert client.put(f"/orgs/{ORG_ID}/partner-keys/{KEY_ID}/folder", json={"folder_id": None}).status_code == 200
+
+    r = client.put(f"/orgs/{ORG_ID}/partner-keys/{KEY_ID}/folder", json={"folder_id": "not-ours"})
+    assert r.status_code == 422 and r.json()["detail"] == {"code": "unknown_folder"}
+
+    r = client.put(f"/orgs/{ORG_ID}/partner-keys/nope/folder", json={"folder_id": FOLDER_ID})
+    assert r.status_code == 404
+
+
+def test_folder_routes_are_admin_only(client, flags, monkeypatch):
+    def deny(sb, uid, org):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    monkeypatch.setattr("partner_api.org_router.authz.require_admin", deny)
+    assert client.post(f"/orgs/{ORG_ID}/partner-key-folders", json={"name": "Ingest"}).status_code == 403
+    assert client.put(f"/orgs/{ORG_ID}/partner-keys/{KEY_ID}/folder", json={"folder_id": None}).status_code == 403
+
+
+# ---- Msanii-admin surface ----------------------------------------------------
+
+
+@pytest.fixture
+def admin_client(client, monkeypatch):
+    import main
+    from subscriptions.admin_auth import require_admin
+
+    async def _pass():
+        return "admin@example.com"
+
+    main.app.dependency_overrides[require_admin] = _pass
+    yield client
+    main.app.dependency_overrides.pop(require_admin, None)
+
+
+def test_admin_key_list_returns_keys_and_folders(admin_client, monkeypatch):
+    monkeypatch.setattr(
+        "subscriptions.admin_router.psvc.key_console",
+        lambda sb, org: {"keys": [{"id": KEY_ID}], "folders": [FOLDER]},
+    )
+    r = admin_client.get(f"/admin/orgs/{ORG_ID}/partner-keys")
+    assert r.status_code == 200 and r.json() == {"keys": [{"id": KEY_ID}], "folders": [FOLDER]}
+
+
+def test_admin_mint_passes_the_folder_and_422s_an_unknown_one(admin_client, monkeypatch):
+    monkeypatch.setattr("subscriptions.admin_router._require_org", lambda sb, org: None)
+    seen = []
+
+    def fake_mint(sb, org_id, **kw):
+        if kw.get("folder_id") == "not-ours":
+            raise ValueError("unknown folder")
+        seen.append(kw)
+        return {"id": "new", "secret": "mk_live_new"}
+
+    monkeypatch.setattr("subscriptions.admin_router.psvc.mint_key", fake_mint)
+    r = admin_client.post(f"/admin/orgs/{ORG_ID}/partner-keys", json={"label": "Prod", "folder_id": FOLDER_ID})
+    assert r.status_code == 200 and seen[0]["folder_id"] == FOLDER_ID
+    r = admin_client.post(f"/admin/orgs/{ORG_ID}/partner-keys", json={"label": "Prod", "folder_id": "not-ours"})
+    assert r.status_code == 422 and r.json()["detail"] == {"code": "unknown_folder"}
+
+
+def test_admin_usage_route_passes_the_range_through(admin_client, monkeypatch):
+    calls = []
+
+    async def fake_rollup(db, org_id, range_="mtd"):
+        calls.append((org_id, range_))
+        return {"range": range_, "byKey": [], "byFolder": []}
+
+    monkeypatch.setattr("orgs.service.org_usage_rollup", fake_rollup)
+    r = admin_client.get(f"/admin/orgs/{ORG_ID}/usage?range=1y")
+    assert r.status_code == 200 and r.json()["range"] == "1y"
+    assert calls == [(ORG_ID, "1y")]
+    # No org membership is consulted: a Msanii admin holds no seat.
+    assert admin_client.get(f"/admin/orgs/{ORG_ID}/usage").status_code == 200
+    assert calls[1] == (ORG_ID, "mtd")
+
+
+def test_admin_usage_route_rejects_an_unknown_range(admin_client, monkeypatch):
+    called = MagicMock()
+    monkeypatch.setattr("orgs.service.org_usage_rollup", called)
+    r = admin_client.get(f"/admin/orgs/{ORG_ID}/usage?range=30d")
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "invalid_range"
+    called.assert_not_called()
+
+
+def test_admin_routes_require_a_msanii_admin(client):
+    """No dependency override: the real require_admin runs and the test JWT is
+    not an admin."""
+    assert client.get(f"/admin/orgs/{ORG_ID}/usage").status_code in (401, 403)
+    assert client.get(f"/admin/orgs/{ORG_ID}/partner-keys").status_code in (401, 403)

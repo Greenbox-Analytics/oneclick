@@ -22,6 +22,7 @@ import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 import { TeamCardPanel } from "@/components/billing/TeamCardPanel";
 import { PlanCard } from "@/components/billing/PlanCard";
 import { CreditsUsageCard } from "@/components/billing/CreditsUsageCard";
+import { MyApiUsage } from "@/components/profile/MyApiUsage";
 import { ResourceLimitsCard } from "@/components/billing/ResourceLimitsCard";
 import { IntegrationsCard } from "@/components/billing/IntegrationsCard";
 import { useEntitlements } from "@/hooks/useEntitlements";
@@ -440,8 +441,9 @@ const Profile = () => {
           <PlanCard />
 
           {/* Credits & usage (renders nothing when the flag is off) */}
-          <div id="credits-usage" className="scroll-mt-4">
+          <div id="credits-usage" className="flex flex-col gap-6 scroll-mt-4">
             <CreditsUsageCard />
+            <MyApiUsage />
           </div>
 
           {/* Resource limits */}

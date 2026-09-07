@@ -26,6 +26,7 @@ const seats: OrgSeatUsage[] = [
     effectiveCap: null,
     capUsed: 0,
     spentThisPeriod: 10,
+    byAction: [],
   },
 ];
 

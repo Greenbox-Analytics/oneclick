@@ -168,6 +168,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # The partner API's billing headers (a split sheet carries the charge in
+    # headers because the body is the document) and the download filename —
+    # a browser hides every custom response header not listed here.
+    expose_headers=["Content-Disposition", "Msanii-Credits", "Msanii-Request-Id", "Msanii-Replayed"],
 )
 
 

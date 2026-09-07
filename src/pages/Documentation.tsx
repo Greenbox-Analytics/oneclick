@@ -19,9 +19,10 @@ import { useToolPrices } from "@/hooks/useCreditPacks";
 import { ACTION_ORDER, estimateCredits, SIZED_ACTIONS, TOOL_META, type ToolCreditPrices } from "@/lib/credits";
 import type { CreditAction } from "@/hooks/useCreditUsage";
 import { PartnerApiConsole, type ConsoleKind } from "@/components/docs/PartnerApiConsole";
-import { MethodBadge, Tag } from "@/components/docs/apiBits";
+import { MethodBadge, ResponseExample, Tag } from "@/components/docs/apiBits";
 import {
-  API_SAMPLES, PARTNER_API_URL, REGISTRY_PRICE, ROYALTIES_PRICE, SPLIT_SHEET_PRICE, SPLIT_SHEET_SAMPLE, ZOE_PRICE,
+  API_SAMPLES, ERROR_EVENT_RESPONSE, PARTNER_API_URL, REGISTRY_PRICE, ROYALTIES_PRICE, ROYALTIES_RESPONSE,
+  SPLIT_SHEET_HEADERS, SPLIT_SHEET_PRICE, SPLIT_SHEET_SAMPLE, SPLITS_RESPONSE, ZOE_PRICE, ZOE_RESPONSE,
 } from "@/components/docs/partnerApiSamples";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
@@ -104,11 +105,10 @@ const SelectSectionContext = createContext<(id: string) => void>(() => {});
 // API reference — tabs, sidebar nav, console kind
 // ---------------------------------------------------------------------------
 
-type ApiTabId = "overview" | "auth" | "royalties" | "registry" | "splitsheet" | "zoe" | "errors" | "billing";
+type ApiTabId = "overview" | "royalties" | "registry" | "splitsheet" | "zoe" | "errors" | "billing";
 
 const API_TABS: { id: ApiTabId; label: string }[] = [
   { id: "overview", label: "Overview" },
-  { id: "auth", label: "Authentication" },
   { id: "royalties", label: "Royalty calculation" },
   { id: "registry", label: "Splits" },
   { id: "splitsheet", label: "Split sheet" },
@@ -122,7 +122,7 @@ const parseApiTab = (s: string | null): ApiTabId => (s && API_TAB_IDS.has(s) ? (
 // Which console sits beside each tab: the billed endpoints get their own, the
 // rest share the free key check (GET /zoe/v1/models).
 const CONSOLE_KIND: Record<ApiTabId, ConsoleKind> = {
-  overview: "check", auth: "check", errors: "check", billing: "check",
+  overview: "check", errors: "check", billing: "check",
   royalties: "royalties", registry: "registry", splitsheet: "splitsheet", zoe: "zoe",
 };
 
@@ -133,7 +133,6 @@ interface ApiNavItem {
 const API_NAV: { group: string; items: ApiNavItem[] }[] = [
   { group: "Start here", items: [
     { key: "overview", tab: "overview", label: "Overview", icon: Info },
-    { key: "auth", tab: "auth", label: "Authentication", icon: Lock },
     { key: "billing", tab: "billing", label: "Billing & limits", icon: Coins },
   ] },
   { group: "Endpoints", items: [
@@ -141,7 +140,7 @@ const API_NAV: { group: string; items: ApiNavItem[] }[] = [
     { key: "ep-registry", tab: "registry", label: "/registry/v1/splits", method: "POST" },
     { key: "ep-splitsheet", tab: "splitsheet", label: "/splitsheet/v1/documents", method: "POST" },
     { key: "ep-zoe", tab: "zoe", label: "/zoe/v1/chat/completions", method: "POST" },
-    { key: "ep-models", tab: "auth", anchor: "your-first-request", label: "/zoe/v1/models", method: "GET" },
+    { key: "ep-models", tab: "overview", anchor: "connect", label: "/zoe/v1/models", method: "GET" },
   ] },
   { group: "Schemas", items: [
     { key: "sch-statement", tab: "royalties", anchor: "the-statement-file", label: "statement", method: "{ }" },
@@ -158,7 +157,7 @@ const API_NAV: { group: string; items: ApiNavItem[] }[] = [
 ];
 // The nav row that lights up when a tab is reached without clicking a row.
 const API_NAV_DEFAULT_KEY: Record<ApiTabId, string> = {
-  overview: "overview", auth: "auth", billing: "billing", errors: "err-http",
+  overview: "overview", billing: "billing", errors: "err-http",
   royalties: "ep-royalties", registry: "ep-registry", splitsheet: "ep-splitsheet", zoe: "ep-zoe",
 };
 
@@ -1364,66 +1363,6 @@ const P = ({ children }: { children: React.ReactNode }) => (
 // Mirrors docs/partner-api-reference.md — keep the two in step.
 // ---------------------------------------------------------------------------
 
-const API_RESULT_EXAMPLE = `{
-  "type": "result",
-  "payments": [
-    {
-      "song_title": "Blue Sky",
-      "party_name": "Jane Doe",
-      "role": "producer",
-      "royalty_type": "master",
-      "percentage": 50.0,
-      "basis": "net",
-      "gross_amount": 1000.0,
-      "expenses_applied": 200.0,
-      "net_amount": 800.0,
-      "amount_to_pay": 400.0,
-      "terms": null
-    },
-    {
-      "song_title": "Red Sun",
-      "party_name": "Jane Doe",
-      "role": "producer",
-      "royalty_type": "master",
-      "percentage": 50.0,
-      "basis": "net",
-      "gross_amount": 500.0,
-      "expenses_applied": 100.0,
-      "net_amount": 400.0,
-      "amount_to_pay": 200.0,
-      "terms": null
-    }
-  ],
-  "total_payments": 2,
-  "expense_review_required": true
-}`;
-
-const API_ERROR_EXAMPLE = `{
-  "type": "error",
-  "code": "NO_SONG_MATCHES",
-  "message": "The contract covers songs that don't appear in this royalty statement.",
-  "suggestion": "Make sure the statement is for the same release as the contract…",
-  "details": {"contract_works": ["Blue Sky"], "statement_songs": ["Blue Skies (Live)"]}
-}`;
-
-const ZOE_RESPONSE_EXAMPLE = `{
-  "id": "chatcmpl-…",
-  "object": "chat.completion",
-  "created": 1757030400,
-  "model": "zoe",
-  "choices": [
-    {
-      "index": 0,
-      "message": {
-        "role": "assistant",
-        "content": "A mechanical royalty is paid to the songwriter and publisher each time a composition is reproduced…"
-      },
-      "finish_reason": "stop"
-    }
-  ],
-  "usage": {"prompt_tokens": 120, "completion_tokens": 210, "total_tokens": 330}
-}`;
-
 function ApiTabStrip({ tab, onSelect }: { tab: ApiTabId; onSelect: (tab: ApiTabId) => void }) {
   return (
     <div role="tablist" className="no-scrollbar mb-6 mt-5 flex gap-0.5 overflow-x-auto border-b border-border">
@@ -1522,6 +1461,13 @@ const ApiOverviewPanel = () => {
   const { select } = useContext(ApiTabContext);
   return (
     <div>
+      <SectionHeading>Connect</SectionHeading>
+      <P>
+        Every request goes to your base URL over HTTPS and carries your key as a bearer token. <code>GET /zoe/v1/models</code> is the one free route, so it doubles as the key check: it proves the base URL, the key and the network path, and never uses credits — the console on this page runs it. A missing, unknown, revoked or expired key is a <code>401</code> with code <code>invalid_key</code> on every route, as is a team whose API access has been turned off.
+      </P>
+      {PARTNER_API_URL ? <CodeBlock label="Base URL">{PARTNER_API_URL}</CodeBlock> : <P>Your base URL comes from your Msanii contact.</P>}
+      <CodeBlock label="Header">{`Authorization: Bearer mk_live_…`}</CodeBlock>
+      <CodeBlock label={API_SAMPLES.models.title}>{API_SAMPLES.models.code}</CodeBlock>
       <SectionHeading>Endpoints</SectionHeading>
       <P>
         Your own software runs Msanii&apos;s tools over HTTPS: royalty calculations, splits from contracts, split sheets and Zoe. A key is your team&apos;s credential and spends your team&apos;s credits, so it belongs on your servers — never in a browser or a mobile app. Pick an endpoint to read its reference; the console on this page runs each one against your key.
@@ -1531,7 +1477,7 @@ const ApiOverviewPanel = () => {
         <EndpointRow method="POST" path="/registry/v1/splits" description="Splits: the deal as data, from contract PDFs." tag={`${REGISTRY_PRICE} credits`} onClick={() => select("registry")} />
         <EndpointRow method="POST" path="/splitsheet/v1/documents" description="A finished split sheet, PDF or Word." tag={`${SPLIT_SHEET_PRICE} credits`} onClick={() => select("splitsheet")} />
         <EndpointRow method="POST" path="/zoe/v1/chat/completions" description="Zoe, OpenAI-compatible: point the OpenAI SDK at /zoe/v1." tag={`${ZOE_PRICE} credits`} onClick={() => select("zoe")} />
-        <EndpointRow method="GET" path="/zoe/v1/models" description={'Lists the one model, "zoe" — and doubles as the key check.'} tag="free" onClick={() => select("auth", "your-first-request")} />
+        <EndpointRow method="GET" path="/zoe/v1/models" description={'Lists the one model, "zoe" — and doubles as the key check.'} tag="free" onClick={() => select("overview", "connect")} />
       </div>
       <Callout type="info" title="Getting access" anchor="getting-access">
         API access is included with Enterprise plans. A team admin creates keys under <strong>Teams → API keys</strong>. A key is shown once at creation and can&apos;t be recovered — only revoked and replaced — so treat it like a password.
@@ -1539,31 +1485,6 @@ const ApiOverviewPanel = () => {
     </div>
   );
 };
-
-const ApiAuthPanel = () => (
-  <div>
-    <SectionHeading>Base URL</SectionHeading>
-    {PARTNER_API_URL ? (
-      <CodeBlock label="Base URL">{PARTNER_API_URL}</CodeBlock>
-    ) : (
-      <P>Your base URL comes from your Msanii contact.</P>
-    )}
-    <P>All paths in this reference are relative to it.</P>
-
-    <SectionHeading>Bearer token</SectionHeading>
-    <P>Every request carries your key as a bearer token:</P>
-    <CodeBlock label="Header">{`Authorization: Bearer mk_live_…`}</CodeBlock>
-    <P>
-      A missing, unknown, revoked or expired key is a <code>401</code> with code <code>invalid_key</code> — as is a team whose API access has been turned off.
-    </P>
-
-    <SectionHeading>Your first request</SectionHeading>
-    <P>
-      Python shown; any HTTP client works. <code>GET /zoe/v1/models</code> is the one free route, so it doubles as the key check: it proves the base URL, the key and the network path, and never uses credits. Every other route does the work it is named for and is billed. The console on this page runs the check against your key.
-    </P>
-    <CodeBlock label={API_SAMPLES.models.title}>{API_SAMPLES.models.code}</CodeBlock>
-  </div>
-);
 
 const ApiRoyaltiesPanel = () => (
   <div>
@@ -1616,7 +1537,7 @@ Red Sun,500.00`}</CodeBlock>
           ["royalty_type", "string, required", "What income the share is paid from. The calculation covers streaming and master income, so use master or streaming (digital, DSP revenue and similar also count). Publishing, mechanical, sync and performance shares are ignored — they are paid from different statements."],
           ["percentage", "number, required", "0–100, applied to each matched work."],
           ["basis", "\"gross\" | \"net\"", "gross pays the percentage of the statement amount; net deducts the work's share of expenses first. Falls back to default_basis, then gross."],
-          ["terms", "string", "The clause, verbatim if you have it. Returned on each payment. If it names SoundExchange, a PRO or the MLC as the payer, the share is treated as paid outside this statement and skipped."],
+          ["terms", "string", "The clause, verbatim if you have it. If it names SoundExchange, a PRO or the MLC as the payer, the share is treated as paid outside this statement and skipped."],
         ]}
       />
       <CodeBlock label="contract_terms">{`{
@@ -1626,6 +1547,9 @@ Red Sun,500.00`}</CodeBlock>
     {"party_name": "Jane Doe", "royalty_type": "master", "percentage": 50, "basis": "net"}
   ]
 }`}</CodeBlock>
+      <Callout type="info" title="Lists" anchor="lists">
+        <code>parties</code>, <code>works</code> and <code>royalty_shares</code> are JSON arrays inside <code>contract_terms</code>; <code>expenses</code> is its own array, sent as a separate field. One object per entry, as many as the deal has. Two producers on two songs is two parties, two works and two shares. The console on this page builds them from rows and shows the exact body it sends.
+      </Callout>
 
       <SubHeading>Expenses</SubHeading>
       <P>
@@ -1645,24 +1569,11 @@ Red Sun,500.00`}</CodeBlock>
       <P>
         A <code>200</code> stream. While a PDF is being read the server sends a heartbeat line (<code>: ping</code>) every 15 seconds — ignore lines starting with a colon. Exactly one <code>data:</code> event follows, carrying either a result or an error.
       </P>
-      <PropTable
-        headers={["payments[] field", "Type", "Description"]}
-        rows={[
-          ["song_title", "string", "The work's title as given in the contract."],
-          ["party_name, role, royalty_type, percentage, terms", "", "Copied from the share; role is the matching party's role, or unknown."],
-          ["basis", "\"gross\" | \"net\"", "The basis actually applied."],
-          ["gross_amount", "number", "What the statement paid for this song, all matching rows summed."],
-          ["expenses_applied", "number", "Expenses deducted for this song; 0 on a gross share."],
-          ["net_amount", "number", "gross_amount − expenses_applied, floored at 0."],
-          ["amount_to_pay", "number", "net_amount × percentage ÷ 100 — the figure to pay."],
-        ]}
-      />
-
       <SubHeading>Result event</SubHeading>
       <P>
-        One entry per party per matched work. <code>total_payments</code> is their count and <code>expense_review_required</code> is true when any payment is on a net basis — the expense list changed the amounts and deserves a human check. For the statement and terms above with the 300.00 project-wide expense:
+        Three sections: the totals, one line per party per matched work, and what the call cost. For the statement and the <code>contract_terms</code> block above, with the 300.00 project-wide expense:
       </P>
-      <CodeBlock label="data: — result event">{API_RESULT_EXAMPLE}</CodeBlock>
+      <ResponseExample label="data: — result event" sections={ROYALTIES_RESPONSE} />
 
       <SubHeading>Unmatched titles</SubHeading>
       <P>
@@ -1671,28 +1582,6 @@ Red Sun,500.00`}</CodeBlock>
     </Sect>
   </div>
 );
-
-const REGISTRY_RESULT_EXAMPLE = `{
-  "type": "result",
-  "contract_terms": {
-    "parties": [{"name": "Jane Doe", "role": "producer", "aliases": []}],
-    "works": [{"title": "Blue Sky", "work_type": "song"}],
-    "royalty_shares": [
-      {"party_name": "Jane Doe", "royalty_type": "master",
-       "percentage": 50.0, "terms": "…", "basis": "net"}
-    ],
-    "contract_summary": "…",
-    "default_basis": null
-  },
-  "splits": {
-    "parties": [
-      {"name": "Jane Doe", "role": "producer", "aliases": [],
-       "master_pct": 50.0, "publishing_pct": 0.0, "soundexchange_pct": 0.0,
-       "is_main_artist": true}
-    ],
-    "main_artist_found": true
-  }
-}`;
 
 const ApiRegistryPanel = () => (
   <div>
@@ -1716,7 +1605,7 @@ const ApiRegistryPanel = () => (
         headers={["Field", "Type", "Description"]}
         rows={[
           ["contracts", "file, repeated, required", "Contract PDFs — up to 10 files, 20 MB in total. Send the field once per file; several PDFs are merged into one set of terms."],
-          ["main_artist_name", "string", "Optional. The artist the splits are built around: they are flagged is_main_artist and kept even at 0 / 0. If the name isn't found in the contract, main_artist_found is false and the artist is left out of splits."],
+          ["main_artist_name", "string", "Optional. The artist the splits are built around: they are kept even at 0 / 0 and named in splits.main_artist, by the name the contract uses. If the name isn't found, main_artist is null and the artist is left out."],
           ["Idempotency-Key", "header", "Optional. The same key with the same files and artist in the same billing period is charged once. Recommended."],
         ]}
       />
@@ -1732,20 +1621,7 @@ const ApiRegistryPanel = () => (
       <P>
         Two views of one contract. <code>contract_terms</code> is documented under the royalty calculation&apos;s inputs and can be sent there verbatim — parse a contract once, then run every statement against it at the base price with no AI. <code>splits</code> is the Registry&apos;s ownership view.
       </P>
-      <CodeBlock label="data: — result event">{REGISTRY_RESULT_EXAMPLE}</CodeBlock>
-      <PropTable
-        headers={["splits.parties[] field", "Type", "Description"]}
-        rows={[
-          ["name, role, aliases", "", "The party as named in the contract, with any p/k/a or a/k/a names."],
-          ["master_pct", "number", "Share of the sound recording's income, 0–100."],
-          ["publishing_pct", "number", "Share of the composition's income, 0–100."],
-          ["soundexchange_pct", "number", "Share of neighbouring-rights income the contract assigns, where it does."],
-          ["is_main_artist", "boolean", "True for the party matching main_artist_name."],
-        ]}
-      />
-      <P>
-        Parties with neither a master nor a publishing share are left out; the main artist is always kept. <code>main_artist_found</code> says whether the name you sent was matched.
-      </P>
+      <ResponseExample label="data: — result event" sections={SPLITS_RESPONSE} />
       <SubHeading>Unreadable contracts</SubHeading>
       <P>
         A scanned image, an encrypted file or an empty PDF ends in an error event with code <code>CONTRACT_UNREADABLE</code>. An error event is never billed.
@@ -1800,6 +1676,7 @@ const ApiSplitSheetPanel = () => (
           ["label", "string", "The label on the master side, if any."],
         ]}
       />
+      <Callout type="info" title="Lists" anchor="contributor-lists"><code>contributors</code> is a JSON array: one object per person, 1–50 of them. The console on this page builds it from rows.</Callout>
       <CodeBlock label="request body">{SPLIT_SHEET_SAMPLE}</CodeBlock>
       <SubHeading>Example</SubHeading>
       <CodeBlock label={API_SAMPLES.splitSheet.title}>{API_SAMPLES.splitSheet.code}</CodeBlock>
@@ -1807,16 +1684,9 @@ const ApiSplitSheetPanel = () => (
 
     <Sect tone="out" name="Outputs" sub="What comes back" tag="application/pdf · docx">
       <P>
-        A <code>200</code> whose body is the document itself. Save the body as the file; the headers tell you what it is.
+        A <code>200</code> whose body is the document itself. Save the body as the file; the headers tell you what it is and what it cost.
       </P>
-      <PropTable
-        headers={["Header", "Value", "Notes"]}
-        rows={[
-          ["Content-Type", "application/pdf", "or application/vnd.openxmlformats-officedocument.wordprocessingml.document for docx."],
-          ["Content-Disposition", "attachment; filename=\"Split_Sheet_<title>.<format>\"", "Characters outside letters, digits, . _ - are replaced by _."],
-          ["Content-Length", "bytes", ""],
-        ]}
-      />
+      <PropTable headers={["Header", "Value", "Notes"]} rows={SPLIT_SHEET_HEADERS} />
       <P>
         A sheet that could not be rendered is a <code>500</code> with code <code>internal_error</code> and a <code>request_id</code> to quote to support. It is never billed.
       </P>
@@ -1860,7 +1730,7 @@ const ApiZoePanel = () => (
         ["max_tokens", "integer", "1–4,000; also the default."],
       ]}
     />
-    <CodeBlock label="200 — chat.completion">{ZOE_RESPONSE_EXAMPLE}</CodeBlock>
+    <ResponseExample label="200 — chat.completion" sections={ZOE_RESPONSE} />
 
     <SectionHeading>What Zoe answers</SectionHeading>
     <P>
@@ -1892,7 +1762,7 @@ const ApiErrorsPanel = () => (
     <P>
       Inside a calculation or splits stream, the failure arrives as an error event — HTTP is already <code>200</code> by then. <code>message</code> and <code>suggestion</code> are safe to show a person; an error event is never billed.
     </P>
-    <CodeBlock label="data: — error event">{API_ERROR_EXAMPLE}</CodeBlock>
+    <ResponseExample label="data: — error event" sections={ERROR_EVENT_RESPONSE} />
     <PropTable
       headers={["code", "details", "Meaning"]}
       rows={[
@@ -1914,6 +1784,7 @@ const ApiBillingPanel = () => (
   <div>
     <SectionHeading>How billing works</SectionHeading>
     <ul className="mb-3 list-disc space-y-1.5 pl-5 text-sm leading-relaxed text-muted-foreground">
+      <li><strong className="text-foreground">Every response says what it cost.</strong> <code>billing.credits</code> in a result event, a Zoe body or the stream&apos;s final stop frame; the <code>Msanii-Credits</code> header on a document. A replay under the same Idempotency-Key reports 0 and <code>replayed: true</code>. No token counts are returned.</li>
       <li><strong className="text-foreground">You pay only for a result you received.</strong> The charge is applied after the result event, the document, or the last chunk of a Zoe stream is returned. A run that fails before the results arrived, costs nothing.</li>
       <li><strong className="text-foreground">Each call has a base price</strong> — at the time of writing {ROYALTIES_PRICE} credits per calculation, {REGISTRY_PRICE} per splits run, {SPLIT_SHEET_PRICE} per split sheet and {ZOE_PRICE} per Zoe answer, shown as <code>price</code> in a 402. A calculation or parse over an unusually large set of PDFs, or a very long Zoe exchange, can cost more; a <code>contract_terms</code> run and a split sheet always cost exactly the base.</li>
       <li><strong className="text-foreground">Send an Idempotency-Key on calculations, parses and sheets.</strong> The same key with the same inputs is charged once per billing period and returns the same result. Without it, every call is billed. Zoe answers have no idempotency: every delivered answer is billed.</li>
@@ -1945,7 +1816,6 @@ const ApiBillingPanel = () => (
 
 const API_PANELS: Record<ApiTabId, React.FC> = {
   overview: ApiOverviewPanel,
-  auth: ApiAuthPanel,
   royalties: ApiRoyaltiesPanel,
   registry: ApiRegistryPanel,
   splitsheet: ApiSplitSheetPanel,

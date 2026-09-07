@@ -28,6 +28,18 @@ Keys are minted by **humans only** — the org's own admins in the console, or a
 
 Only the SHA-256 hash is stored. The plaintext leaves the system exactly once, in the mint response. The table is **deny-all RLS** — RLS enabled with zero policies, so only the service-role client touches it and an end-user JWT can never read a key hash. Treat a key like a password: it belongs on the partner's servers, never in anything they ship.
 
+## Key folders and inactive keys
+
+Added 2026-09-06 (migration `20260907000001`). Both are console-side concerns — nothing on the bearer surface changes.
+
+**Folders** (`partner_key_folders`) are the org's own grouping of keys by use case or project: org-scoped, unique by name within the org, deny-all RLS like the keys table. A key carries at most one `folder_id`, and spend is attributed by the key's **current** folder — moving a key moves its history with it, which is the point (an admin regrouping keys wants the rollup to follow). Creating a folder is idempotent on the name, case-insensitively: the UI is "type a folder name", so re-typing an existing one files the key there rather than erroring at someone who did nothing wrong. Deleting a folder unfiles its keys (`ON DELETE SET NULL`); it never deletes a key.
+
+**Inactive keys are hidden, not deleted.** A key revoked (`revoked_at`) or expired (`expires_at`) more than 30 days ago drops out of the key list and out of the usage payload's `byKey` rows. Its row and its ledger history stay: the spend still counts in the org's totals, in the per-day series, and in its folder's `byFolder` total — the money happened. A revoked row with no `revoked_at` (pre-migration data) is never hidden, because there is no honest answer to "how long ago?". The predicate is `partner_api.service.is_hidden`.
+
+The usage payload gains `byFolder` beside `byKey`, and each seat gains `apiCredits`/`apiRuns` — spend through the keys that member created, kept apart from the cap-relevant `spentThisPeriod` (a key spends the pool and moves no member cap). A member can read their own keys' spend at `GET /me/api-usage`; the org-wide view stays admin-only.
+
+**Msanii admins** read any org's usage at `GET /admin/orgs/{id}/usage` (same payload as `GET /orgs/{id}/usage`, same `range` values) and any org's keys + folders at `GET /admin/orgs/{id}/partner-keys`. The admin route calls the rollup directly: a Msanii admin holds no seat in the org and so cannot pass its member-admin check.
+
 ## Endpoints
 
 ### Machine (bearer key)
@@ -97,6 +109,8 @@ Charge-on-success against the org's **pool** wallet, never a personal one, and n
 
 The amount comes from `ai_pricing.compute_charge`, the same three-term formula the product uses: `max(base, metered, base + size_tail)`. The base is `credit_prices.partner_oneclick_run` (seeded at 30), and it is a floor. There must never be a second implementation of that formula.
 
+**Every response reports the charge** (2026-09-06). The router computes `compute_charge` BEFORE writing the deliverable and attaches `service.billing_block(charge, request_id, replayed=…)` — inside the result event (royalties, splits), the Zoe body and the stream's final `stop` frame, or as `Msanii-Credits` / `Msanii-Request-Id` / `Msanii-Replayed` headers on a split sheet (the body is the document; `main.py`'s CORS `expose_headers` lists them so the docs console can read them — the console's origin must be in the API service's allowed origins for that to work in prod). The debit still runs AFTER the frame — charge-on-delivery is unchanged (except the Zoe stream, where the debit follows the last content chunk and precedes the `stop` frame that reports it). `replayed` comes from `service.already_charged`, one indexed read on the request id, done only when an `Idempotency-Key` was sent (a uuid4 can never match); it is advisory — the RPC's own `p_request_id` check is the authority — so a race or a failed read over-reports, never under-reports. Error events and frames carry `service.unbilled()`. Analytics `*_completed` events report `charged` as 0 on a replay plus a `replayed` flag. No token counts anywhere: Zoe's OpenAI `usage` block is not sent. Results are sectioned (`models.calc_result`, `models.to_partner_splits`): royalties `summary` + `payments[{song, payee, share, amounts}]` with amounts rounded to 2 dp and `total_payable` the sum of the rounded lines; splits `contract_terms` + `splits{main_artist, parties}`.
+
 `check_pool` is the only billing authority — the `debit_credits` RPC deliberately tolerates overdraft, so nothing downstream re-decides it. It compares `bundle + reserve >= price`.
 
 Idempotency: `derive_request_id` builds `uuid5(key_id, "{Idempotency-Key}:{payload_sha256}:{period_end}")`. All four terms are load-bearing. The key id stops one partner's header colliding with another's. The payload fingerprint stops one header ridden across different payloads buying free runs. **The period end** stops a pinned header buying a year of runs for one charge — `idx_credit_ledger_request_id` is a global, never-expiring unique index, so without it the first ledger row would keep matching forever. Same key, same deliverable, same period is charged once; a new period pays again. No header means a fresh `uuid4`, so every retry pays.
@@ -132,7 +146,8 @@ cd src/backend && poetry run pytest tests/test_partner_keys.py tests/test_partne
   tests/test_partner_org_router.py tests/test_partner_portal_service.py \
   tests/test_partner_registry.py tests/test_partner_splitsheet.py tests/test_oneclick_billing_delivery.py \
   tests/test_orgs_offboard_partner_keys.py tests/test_compute_charge.py tests/test_fetch_all.py \
-  tests/test_partner_example_client.py tests/test_partner_zoe.py -v
+  tests/test_partner_example_client.py tests/test_partner_zoe.py \
+  tests/test_partner_service_billing.py tests/test_org_usage_analysis.py -v
 
 npx vitest run src/components/orgs/__tests__/partner-keys-helpers.test.ts \
   src/components/orgs/__tests__/api-keys-panel.test.tsx \

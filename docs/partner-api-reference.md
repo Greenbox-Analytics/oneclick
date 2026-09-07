@@ -33,7 +33,7 @@ api.chat([{"role": "user", "content": "What is a mechanical royalty?"}])   # Zoe
 
 deal = api.parse_contract(["producer-agreement.pdf"], main_artist_name="Jane Doe")
 deal["contract_terms"]   # exactly what calculate() takes — parse once, run every statement at the base price
-deal["splits"]           # {"parties": [{"name": "Jane Doe", "master_pct": 50.0, "publishing_pct": 0.0, …}], "main_artist_found": True}
+deal["splits"]  # {"main_artist": "Jane Doe", "parties": [{"name": "Jane Doe", "master_pct": 50.0, "publishing_pct": 0.0, …}]}
 
 pdf = api.split_sheet(
     work_title="Blue Sky",
@@ -54,7 +54,7 @@ result = api.calculate(
     idempotency_key="run-2026-09-05-001",
 )
 for p in result["payments"]:
-    print(p["song_title"], p["party_name"], p["amount_to_pay"])
+    print(p["song"], p["payee"]["name"], p["amounts"]["payable"])
 ```
 
 Zoe is OpenAI-compatible, so the official OpenAI SDK works without this client at all:
@@ -163,7 +163,7 @@ Red Sun,500.00
 | `royalty_type` | string | yes | What income the share is paid from. The calculation covers streaming and master income, so use `master` or `streaming` (variants such as `digital`, `DSP revenue`, `master recording royalties` also count). Publishing, mechanical, sync and performance shares are ignored: they are paid from different statements |
 | `percentage` | number | yes | 0–100 |
 | `basis` | `"gross"` \| `"net"` | no | `gross` pays the percentage of the statement amount; `net` deducts the work's share of `expenses` first. Falls back to `default_basis`, then `gross` |
-| `terms` | string | no | The clause, verbatim if you have it. Returned on each payment. If it names a direct-pay collector (SoundExchange, a PRO, the MLC) as the payer, the share is treated as paid outside this statement and skipped |
+| `terms` | string | no | The clause, verbatim if you have it. Returned by `/registry/v1/splits`, not on a payment. If it names a direct-pay collector (SoundExchange, a PRO, the MLC) as the payer, the share is treated as paid outside this statement and skipped |
 
 #### Expenses
 
@@ -181,77 +181,55 @@ Red Sun,500.00
 
 #### Response
 
-The response is `200 text/event-stream`. While a PDF is being read the server sends a heartbeat comment line (`: ping`) every 15 seconds; ignore lines starting with `:`. Exactly one `data:` event follows, and it is either a result or an error:
+The response is `200 text/event-stream`. While a PDF is being read the server sends a heartbeat comment line (`: ping`) every 15 seconds; ignore lines starting with `:`. Exactly one `data:` event follows, and it is either a result or an error. Every event carries a `billing` block saying what the call cost (see [Billing](#billing)).
 
-```
-: ping
-
-data: {"type":"result","payments":[…],"total_payments":2,"expense_review_required":true}
-
-```
-
-**Result event**
-
-| Field | Type | Notes |
-|---|---|---|
-| `type` | `"result"` | |
-| `payments` | array of Payment | One per matched work × paying share |
-| `total_payments` | integer | `len(payments)` |
-| `expense_review_required` | boolean | `true` when any payment is on a net basis, so the expense list affected the amounts and deserves a human check |
-
-**Payment**
-
-| Field | Type | Notes |
-|---|---|---|
-| `song_title` | string | The work's title as given in the contract |
-| `party_name` | string | From the share |
-| `role` | string | The matching party's role, or `unknown` |
-| `royalty_type` | string | From the share |
-| `percentage` | number | From the share |
-| `basis` | `"gross"` \| `"net"` | The basis actually applied |
-| `gross_amount` | number | What the statement paid for this song, all matching rows summed |
-| `expenses_applied` | number | Expenses deducted for this song; `0` on a gross share |
-| `net_amount` | number | `gross_amount − expenses_applied`, floored at 0. Equals `gross_amount` on a gross share |
-| `amount_to_pay` | number | `net_amount × percentage / 100` — the figure to pay |
-| `terms` | string \| null | From the share |
-
-A full example, for the statement above with one 50 % net-basis master share and a project-wide 300.00 expense:
+**Result event** — three sections, here for the statement above with one 50 % net-basis master share and a project-wide 300.00 expense:
 
 ```json
 {
   "type": "result",
+  "summary": {"payments": 2, "total_payable": 600.0, "expense_review_required": true},
   "payments": [
     {
-      "song_title": "Blue Sky",
-      "party_name": "Jane Doe",
-      "role": "producer",
-      "royalty_type": "master",
-      "percentage": 50.0,
-      "basis": "net",
-      "gross_amount": 1000.0,
-      "expenses_applied": 200.0,
-      "net_amount": 800.0,
-      "amount_to_pay": 400.0,
-      "terms": null
+      "song": "Blue Sky",
+      "payee": {"name": "Jane Doe", "role": "producer"},
+      "share": {"type": "master", "percentage": 50.0, "basis": "net"},
+      "amounts": {"gross": 1000.0, "expenses": 200.0, "net": 800.0, "payable": 400.0}
     },
     {
-      "song_title": "Red Sun",
-      "party_name": "Jane Doe",
-      "role": "producer",
-      "royalty_type": "master",
-      "percentage": 50.0,
-      "basis": "net",
-      "gross_amount": 500.0,
-      "expenses_applied": 100.0,
-      "net_amount": 400.0,
-      "amount_to_pay": 200.0,
-      "terms": null
+      "song": "Red Sun",
+      "payee": {"name": "Jane Doe", "role": "producer"},
+      "share": {"type": "master", "percentage": 50.0, "basis": "net"},
+      "amounts": {"gross": 500.0, "expenses": 100.0, "net": 400.0, "payable": 200.0}
     }
   ],
-  "total_payments": 2,
-  "expense_review_required": true
+  "billing": {"credits": 30, "request_id": "a1b2c3…"}
 }
 ```
+
+`summary`
+
+| Field | Type | Notes |
+|---|---|---|
+| `payments` | integer | How many payment lines follow |
+| `total_payable` | number | The sum of every line's `amounts.payable`. Amounts are rounded to 2 dp before summing, so the lines you are shown add up to this figure exactly |
+| `expense_review_required` | boolean | `true` when any line is on a net basis, so the expense list affected the amounts and deserves a human check |
+
+`payments[]` — one line per party per matched work
+
+| Field | Type | Notes |
+|---|---|---|
+| `song` | string | The work's title as given in the contract |
+| `payee.name`, `payee.role` | string | Who is paid, and the role the contract gives them (or `unknown`) |
+| `share.type` | string | The income the share is paid from, as written in the contract (master, streaming…) |
+| `share.percentage` | number | The share applied, 0–100 |
+| `share.basis` | `"gross"` \| `"net"` | The basis actually applied |
+| `amounts.gross` | number | What the statement paid for this song, all matching rows summed |
+| `amounts.expenses` | number | Expenses deducted for this song; `0` on a gross share |
+| `amounts.net` | number | `gross − expenses`, floored at 0 |
+| `amounts.payable` | number | `net × percentage / 100` — the figure to pay. All four amounts are rounded to 2 dp |
+
+The share's clause text is not repeated here; `/registry/v1/splits` returns it under `contract_terms.royalty_shares[].terms`.
 
 **Error event** — the calculation could not produce a result. HTTP is already `200` by this point, so check `type`:
 
@@ -261,11 +239,12 @@ A full example, for the statement above with one 50 % net-basis master share and
   "code": "NO_SONG_MATCHES",
   "message": "The contract covers songs that don't appear in this royalty statement.",
   "suggestion": "Make sure the statement is for the same release as the contract…",
-  "details": {"contract_works": ["Blue Sky"], "statement_songs": ["Blue Skies (Live)"], "statement_song_total_count": 1}
+  "details": {"contract_works": ["Blue Sky"], "statement_songs": ["Blue Skies (Live)"], "statement_song_total_count": 1},
+  "billing": {"credits": 0}
 }
 ```
 
-`message` and `suggestion` are safe to show to a person. An error event is never billed.
+`message` and `suggestion` are safe to show to a person. An error event is never billed, and says so.
 
 ### POST /registry/v1/splits
 
@@ -276,7 +255,7 @@ The Registry's contract parse: send contract PDFs, get the deal back as data. Th
 | Field | Type | Description |
 |---|---|---|
 | `contracts` | file, repeated, required | Contract PDFs — up to 10 files, 20 MB in total. Send the field once per file; several PDFs are merged into one set of terms |
-| `main_artist_name` | string | Optional. The artist the splits are built around: they are flagged `is_main_artist` and kept even at 0 / 0. When the name is not found in the contract, `main_artist_found` is `false` and the artist is left out of `splits` |
+| `main_artist_name` | string | Optional. The artist the splits are built around: they are kept in `splits` even at 0 / 0 and named in `splits.main_artist`, by the name the contract uses. When the name is not found, `main_artist` is `null` and the artist is left out of `parties` |
 | `Idempotency-Key` | header | Optional. The same key with the same files and artist in the same billing period is charged once. Recommended |
 
 **Response** — `200 text/event-stream`, the same framing as a calculation: heartbeat lines (`: ping`) while the parse runs, then exactly one `data:` event, a result or an error.
@@ -294,18 +273,18 @@ The Registry's contract parse: send contract PDFs, get the deal back as data. Th
     "default_basis": null
   },
   "splits": {
+    "main_artist": "Jane Doe",
     "parties": [
-      {"name": "Jane Doe", "role": "producer", "aliases": [], "master_pct": 50.0,
-       "publishing_pct": 0.0, "soundexchange_pct": 0.0, "is_main_artist": true}
-    ],
-    "main_artist_found": true
-  }
+      {"name": "Jane Doe", "role": "producer", "master_pct": 50.0, "publishing_pct": 0.0, "soundexchange_pct": 0.0}
+    ]
+  },
+  "billing": {"credits": 30, "request_id": "…"}
 }
 ```
 
-`contract_terms` fields are documented under the calculation's `contract_terms` above. In `splits`, parties with neither a master nor a publishing share are omitted (the main artist is always kept); `soundexchange_pct` is the share of neighbouring-rights income the contract assigns, where it does.
+`contract_terms` fields are documented under the calculation's `contract_terms` above. In `splits`, `main_artist` is the party matching `main_artist_name` (or `null`); parties with no master, publishing or SoundExchange share are omitted (the main artist is always kept); `soundexchange_pct` is the share of neighbouring-rights income the contract assigns, where it does.
 
-A contract that cannot be read ends in an error event with code `CONTRACT_UNREADABLE` (a scanned image, an encrypted or empty file). An error event is never billed.
+A contract that cannot be read ends in an error event with code `CONTRACT_UNREADABLE` (a scanned image, an encrypted or empty file). An error event is never billed, and says so in `billing`.
 
 ### POST /splitsheet/v1/documents
 
@@ -349,6 +328,16 @@ Each contributor:
 
 **Response** — `200`, the document itself: `Content-Type: application/pdf` or `application/vnd.openxmlformats-officedocument.wordprocessingml.document`, `Content-Disposition: attachment; filename="Split_Sheet_<title>.<format>"`, `Content-Length` set. Save the body as the file.
 
+The body is the document, so the charge rides in headers:
+
+| Header | Meaning |
+|---|---|
+| `Msanii-Credits` | Credits charged for this document; `0` on a replay |
+| `Msanii-Request-Id` | The id the charge is recorded under — quote it to support |
+| `Msanii-Replayed` | `true`, present only on a replay under the same `Idempotency-Key` |
+
+Header names are case-insensitive; HTTP/2 clients see them lower-cased.
+
 ### POST /zoe/v1/chat/completions
 
 Zoe, Msanii's music-business assistant, behind the OpenAI chat-completions protocol. Any OpenAI SDK works unchanged: `base_url` is your base URL plus `/zoe/v1`, the API key is your Msanii key, and `model` is `zoe`.
@@ -378,11 +367,13 @@ Other OpenAI fields (`n`, `top_p`, `stop`, `tools`, `response_format`, `user`…
   "choices": [
     {"index": 0, "message": {"role": "assistant", "content": "A mechanical royalty is paid…"}, "finish_reason": "stop"}
   ],
-  "usage": {"prompt_tokens": 91, "completion_tokens": 58, "total_tokens": 149}
+  "billing": {"credits": 5, "request_id": "…"}
 }
 ```
 
-With `"stream": true` the response is `text/event-stream` of `chat.completion.chunk` frames — a first delta carrying `role`, then content deltas, then a final frame with `finish_reason: "stop"` — followed by `data: [DONE]`. If Zoe fails mid-stream a frame `{"error": {"code": "zoe_failed", "message": "…"}}` arrives before `[DONE]` and nothing is billed.
+No token counts are returned: `billing.credits` is what the answer cost.
+
+With `"stream": true` the response is `text/event-stream` of `chat.completion.chunk` frames — a first delta carrying `role`, then content deltas, then a final frame with `finish_reason: "stop"` that also carries `billing` — followed by `data: [DONE]`. If Zoe fails mid-stream a frame `{"error": {"code": "zoe_failed", "message": "…"}, "billing": {"credits": 0}}` arrives before `[DONE]` and nothing is billed.
 
 ### GET /zoe/v1/models
 
@@ -421,9 +412,10 @@ OpenAI's model listing: `{"object": "list", "data": [{"id": "zoe", …}]}`. Free
 
 Every deliverable draws credits from the team's pool, whichever key ran it.
 
+- **Every delivered response says what it cost.** A result event, a Zoe body and a Zoe stream's final `stop` frame carry `"billing": {"credits": n, "request_id": "…"}`; a split sheet carries the same in `Msanii-Credits` and `Msanii-Request-Id` headers. Error events and frames carry `"billing": {"credits": 0}`. A replay under the same `Idempotency-Key` in the same billing period reports `credits: 0` and `replayed: true` (header `Msanii-Replayed: true`): it was charged on the first run and not again. Two identical calls sent at the same moment may both report the price even though only one is charged — the report can over-state, never under-state. An HTTP error before the stream opens (401, 402, 413, 422, 500, 502) carries no `billing` block — nothing was charged.
 - **You pay only for an answer you received.** The charge is applied after the result event, the document, or the last content chunk of a Zoe stream is on the wire. A failed call, or one whose connection dropped before the answer arrived, costs nothing.
 - **Each call has a base price** — at the time of writing 30 credits per calculation, 30 per splits run, 20 per split sheet and 5 per Zoe answer, shown as the `price` in a `402`. A calculation or splits run over an unusually large set of PDFs, or a very long Zoe exchange, can cost more than the base; structured `contract_terms` runs and split sheets always cost exactly the base.
-- **Idempotency (calculations, splits and split sheets).** With an `Idempotency-Key`, the same key + the same inputs (files and JSON byte-for-byte) is charged once per billing period, and the replay returns the same result. Without the header every call is billed. Use a key that identifies the run on your side, such as `"<statement id>-<attempt>"`. Zoe answers have no idempotency, as with OpenAI: every delivered answer is billed.
+- **Idempotency (calculations, splits and split sheets).** With an `Idempotency-Key`, the same key + the same inputs (files and JSON byte-for-byte) is charged once per billing period; a `contract_terms` run returns the same result on the replay, while a PDF run is parsed again and may differ slightly. Without the header every call is billed. Use a key that identifies the run on your side, such as `"<statement id>-<attempt>"`. Zoe answers have no idempotency, as with OpenAI: every delivered answer is billed.
 - **The balance is checked first.** A `402` is returned before any work starts. Only a team admin can add credits, in Msanii.
 - `GET /zoe/v1/models` is always free.
 

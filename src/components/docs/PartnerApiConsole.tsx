@@ -10,19 +10,20 @@
 //   zoe         POST /zoe/v1/chat/completions     a real, billed run
 // All stay mounted and only the current one is shown, so a run in flight
 // survives a tab switch (the server finishes — and bills — either way). A
-// billed 200 is labelled with the tool's base price: the API has no balance
-// read, and the true charge sits in the team's ledger. The key lives in page
-// state for the visit and is never persisted.
+// billed 200 shows the credits the response reported (`billing.credits`, or
+// the `Msanii-Credits` header on a document). The key lives in page state for
+// the visit and is never persisted.
 import { useId, useState, type ReactNode } from "react";
 import { Code2, Download, Loader2, Play } from "lucide-react";
 import { Tag } from "./apiBits";
+import { RequestPreview, RowsEditor, rowsToObjects, validateRows, type Column, type Row } from "./RowsEditor";
 import {
   CONSOLE_PRESETS,
   PARTNER_API_URL,
   REGISTRY_PRICE,
   ROYALTIES_PRICE,
+  SPLIT_SHEET_PRESET,
   SPLIT_SHEET_PRICE,
-  SPLIT_SHEET_SAMPLE,
   ZOE_PRICE,
   ZOE_SAMPLE_MESSAGE,
 } from "./partnerApiSamples";
@@ -38,13 +39,10 @@ export interface PartnerApiConsoleProps {
 // ---- response model -----------------------------------------------------------
 
 interface Payment {
-  song_title: string;
-  party_name: string;
-  percentage: number;
-  basis: string;
-  net_amount: number;
-  expenses_applied: number;
-  amount_to_pay: number;
+  song: string;
+  payee: { name: string; role: string };
+  share: { type: string; percentage: number; basis: string };
+  amounts: { gross: number; expenses: number; net: number; payable: number };
 }
 
 interface SplitParty {
@@ -53,7 +51,12 @@ interface SplitParty {
   master_pct: number;
   publishing_pct: number;
   soundexchange_pct: number;
-  is_main_artist: boolean;
+}
+
+interface Billing {
+  credits: number;
+  replayed?: boolean;
+  request_id?: string;
 }
 
 interface ConsoleResult {
@@ -72,9 +75,18 @@ const money = (n: number) => n.toFixed(2);
 const pct = (n: number) => `${Number.isInteger(n) ? n : n.toFixed(1)}%`;
 const secs = (t0: number) => `${((performance.now() - t0) / 1000).toFixed(1)} s`;
 const auth = (key: string) => ({ Authorization: `Bearer ${key.trim()}` });
-// A billed deliverable. The base is the published price and a floor; a large
-// PDF run can cost more, which only the team's ledger shows.
-const billed = (base: number) => `billed (base ${base})`;
+// What the response said the call cost — never a local price table. A replay
+// under an Idempotency-Key was charged on its first run and says so.
+const credits = (b?: Billing | null) =>
+  b ? (b.replayed ? "replay · 0 credits" : `${b.credits} credit${b.credits === 1 ? "" : "s"}`) : "billed";
+const headerCredits = (res: Response) => {
+  // Number(null) is 0, so a missing header must be checked before the cast.
+  const raw = res.headers.get("Msanii-Credits");
+  const n = Number(raw);
+  return raw !== null && Number.isFinite(n)
+    ? credits({ credits: n, replayed: res.headers.get("Msanii-Replayed") === "true" })
+    : "billed";
+};
 
 // What a person can do about a pre-stream HTTP error. Nothing was started, so
 // nothing was charged — every one of these is "no credits spent".
@@ -165,6 +177,48 @@ const AREA =
   "block w-full resize-none rounded-lg border border-border bg-muted/50 px-2.5 py-2 font-mono text-[11.5px] leading-relaxed text-foreground focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/15";
 const FILE =
   "block w-full text-[12px] text-muted-foreground file:mr-2 file:rounded-md file:border file:border-border file:bg-background file:px-2 file:py-1 file:text-[12px] file:font-semibold file:text-foreground";
+
+// ---- rows: the list inputs -------------------------------------------------------
+const ROYALTY_TYPES = ["master", "streaming"] as const; // what a calculation pays from
+const BASES = ["gross", "net"] as const;
+const PARTY_COLS: Column[] = [
+  { key: "name", label: "Name", kind: "text", required: true, placeholder: "Jane Doe" },
+  { key: "role", label: "Role", kind: "text", required: true, placeholder: "producer" },
+];
+const WORK_COLS: Column[] = [{ key: "title", label: "Title", kind: "text", required: true, placeholder: "Blue Sky" }];
+const shareCols = (partyNames: () => string[]): Column[] => [
+  { key: "party_name", label: "Party", kind: "select", options: partyNames, required: true },
+  { key: "royalty_type", label: "Type", kind: "select", options: ROYALTY_TYPES, required: true },
+  { key: "percentage", label: "%", kind: "number", required: true, min: 0, max: 100, width: "w-16" },
+  { key: "basis", label: "Basis", kind: "select", options: BASES, placeholder: "contract default" },
+];
+const EXPENSE_COLS: Column[] = [
+  { key: "description", label: "Description", kind: "text", placeholder: "Mastering" },
+  { key: "amount", label: "Amount", kind: "number", required: true, min: 0, width: "w-20" },
+  { key: "work_titles", label: "Songs", kind: "text", placeholder: "Blue Sky, Red Sun (blank = all)" },
+];
+const CONTRIBUTOR_COLS: Column[] = [
+  { key: "name", label: "Name", kind: "text", required: true, placeholder: "Jane Doe" },
+  { key: "role", label: "Role", kind: "text", required: true, placeholder: "Producer" },
+  { key: "publishing_share", label: "Publishing %", kind: "number", min: 0, max: 100, width: "w-[76px]" },
+  { key: "master_percentage", label: "Master %", kind: "number", min: 0, max: 100, width: "w-[76px]" },
+];
+
+// options only drive the <select>; rowsToObjects reads kind, not options.
+const buildTerms = (parties: Row[], works: Row[], shares: Row[]) => ({
+  parties: rowsToObjects(PARTY_COLS, parties),
+  works: rowsToObjects(WORK_COLS, works),
+  royalty_shares: rowsToObjects(shareCols(() => []), shares),
+});
+const buildExpenses = (expenses: Row[]) =>
+  expenses.map((e) => {
+    const titles = (e.work_titles ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    return {
+      ...(e.description?.trim() ? { description: e.description.trim() } : {}),
+      amount: Number(e.amount),
+      ...(titles.length ? { work_titles: titles } : {}),
+    };
+  });
 
 function Field({ label, htmlFor, children }: { label: string; htmlFor: string; children: ReactNode }) {
   return (
@@ -319,8 +373,10 @@ function RoyaltiesConsole({ apiKey, onApiKeyChange, hidden }: ConsoleProps) {
   const [presetId, setPresetId] = useState(CONSOLE_PRESETS[0].id);
   const preset = CONSOLE_PRESETS.find((p) => p.id === presetId) ?? CONSOLE_PRESETS[0];
   const [statement, setStatement] = useState(preset.statement);
-  const [terms, setTerms] = useState(preset.terms);
-  const [expenses, setExpenses] = useState(preset.expenses);
+  const [parties, setParties] = useState<Row[]>(preset.parties);
+  const [works, setWorks] = useState<Row[]>(preset.works);
+  const [shares, setShares] = useState<Row[]>(preset.shares);
+  const [expenses, setExpenses] = useState<Row[]>(preset.expenses);
   const [files, setFiles] = useState<File[]>([]);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<ConsoleResult | null>(null);
@@ -329,33 +385,36 @@ function RoyaltiesConsole({ apiKey, onApiKeyChange, hidden }: ConsoleProps) {
     const p = CONSOLE_PRESETS.find((x) => x.id === next) ?? CONSOLE_PRESETS[0];
     setPresetId(p.id);
     setStatement(p.statement);
-    setTerms(p.terms);
+    setParties(p.parties);
+    setWorks(p.works);
+    setShares(p.shares);
     setExpenses(p.expenses);
     setResult(null);
   };
 
+  const SHARE_COLS = shareCols(() => parties.map((p) => p.name.trim()).filter(Boolean));
+  const partyErrors = preset.pdf ? [] : validateRows(PARTY_COLS, parties);
+  const workErrors = preset.pdf ? [] : validateRows(WORK_COLS, works);
+  const shareErrors = preset.pdf ? [] : validateRows(SHARE_COLS, shares);
+  const expenseErrors = validateRows(EXPENSE_COLS, expenses);
+  const blocked = partyErrors.length + workErrors.length + shareErrors.length + expenseErrors.length > 0;
+  const terms = buildTerms(parties, works, shares);
+  const expenseBody = buildExpenses(expenses);
+  const preview = {
+    statement: "statement.csv (the text above)",
+    ...(preset.pdf ? { contracts: "<the PDF files>" } : { contract_terms: terms }),
+    ...(expenseBody.length ? { expenses: expenseBody } : {}),
+  };
+
   const run = async () => {
-    // Malformed input never leaves the page: the server would 422 it anyway.
+    // Bad input never leaves the page: the server would 422 it anyway.
     if (preset.pdf && files.length === 0) return setResult(notSent("Choose at least one contract PDF"));
-    if (!preset.pdf) {
-      try {
-        JSON.parse(terms);
-      } catch {
-        return setResult(notSent("contract_terms is not valid JSON"));
-      }
-    }
-    if (expenses.trim()) {
-      try {
-        JSON.parse(expenses);
-      } catch {
-        return setResult(notSent("expenses is not valid JSON"));
-      }
-    }
+    if (blocked) return setResult(notSent("Fix the highlighted fields first"));
     const form = new FormData();
     form.append("statement", new File([statement], "statement.csv", { type: "text/csv" }));
     if (preset.pdf) files.forEach((f) => form.append("contracts", f));
-    else form.append("contract_terms", terms);
-    if (expenses.trim()) form.append("expenses", expenses);
+    else form.append("contract_terms", JSON.stringify(terms));
+    if (expenseBody.length) form.append("expenses", JSON.stringify(expenseBody));
 
     setRunning(true);
     setResult(null);
@@ -367,23 +426,29 @@ function RoyaltiesConsole({ apiKey, onApiKeyChange, hidden }: ConsoleProps) {
       const body = streamBody(raw, last);
       if (last?.type !== "result") return setResult(streamError(t0, last, body, "The calculation failed."));
       const payments = (last.payments as Payment[]) ?? [];
-      const total = payments.reduce((a, p) => a + p.amount_to_pay, 0);
+      // A billed 200 must never be reported as unbilled: an absent summary is
+      // derived from the payments rather than thrown out of the try.
+      const summary = (last.summary as { payments: number; total_payable: number; expense_review_required: boolean }) ?? {
+        payments: payments.length,
+        total_payable: payments.reduce((a, p) => a + p.amounts.payable, 0),
+        expense_review_required: payments.some((p) => p.share.basis === "net"),
+      };
       setResult({
         badge: "200",
         ok: true,
         contentType: "text/event-stream",
-        meta: `${secs(t0)} · ${billed(ROYALTIES_PRICE)}`,
+        meta: `${secs(t0)} · ${credits(last.billing as Billing)}`,
         summary: (
           <>
-            <b className="text-[14px] text-foreground">{money(total)}</b> across {payments.length} payment
-            {payments.length === 1 ? "" : "s"}
-            {last.expense_review_required ? " · review flagged" : ""}
+            <b className="text-[14px] text-foreground">{money(summary.total_payable)}</b> across {summary.payments} payment
+            {summary.payments === 1 ? "" : "s"}
+            {summary.expense_review_required ? " · review flagged" : ""}
           </>
         ),
         rows: payments.map((p) => ({
-          title: `${p.song_title} — ${p.party_name}`,
-          value: money(p.amount_to_pay),
-          detail: `${p.percentage}% of ${p.basis} ${money(p.net_amount)}${p.expenses_applied ? ` (after ${money(p.expenses_applied)} expenses)` : ""}`,
+          title: `${p.song} — ${p.payee.name}`,
+          value: money(p.amounts.payable),
+          detail: `${p.share.percentage}% of ${p.share.basis} ${money(p.amounts.net)}${p.amounts.expenses ? ` (after ${money(p.amounts.expenses)} expenses)` : ""}`,
         })),
         body,
       });
@@ -413,19 +478,21 @@ function RoyaltiesConsole({ apiKey, onApiKeyChange, hidden }: ConsoleProps) {
           <Hint>Msanii&apos;s AI reads the terms from the PDFs, so <code>contract_terms</code> isn&apos;t sent. Up to 10 files, 20 MB in total.</Hint>
         </Field>
       ) : (
-        <Field label="contract_terms" htmlFor={`${id}-terms`}>
-          <textarea id={`${id}-terms`} rows={8} value={terms} onChange={(e) => setTerms(e.target.value)} spellCheck={false} className={AREA} />
-        </Field>
+        <>
+          <RowsEditor label="Party" columns={PARTY_COLS} rows={parties} onChange={setParties} blank={() => ({ name: "", role: "" })} addLabel="Add party" errors={partyErrors} />
+          <RowsEditor label="Work" columns={WORK_COLS} rows={works} onChange={setWorks} blank={() => ({ title: "" })} addLabel="Add work" errors={workErrors} />
+          <RowsEditor label="Share" columns={SHARE_COLS} rows={shares} onChange={setShares} blank={() => ({ party_name: "", royalty_type: "master", percentage: "", basis: "" })} addLabel="Add share" errors={shareErrors} />
+        </>
       )}
-      <Field label="expenses" htmlFor={`${id}-exp`}>
-        <textarea id={`${id}-exp`} rows={2} value={expenses} onChange={(e) => setExpenses(e.target.value)} spellCheck={false} className={AREA} />
-      </Field>
+      <RowsEditor label="Expense" columns={EXPENSE_COLS} rows={expenses} onChange={setExpenses} blank={() => ({ description: "", amount: "", work_titles: "" })} addLabel="Add expense" errors={expenseErrors} min={0} />
+      <RequestPreview body={preview} />
       <RunButton running={running} disabled={!apiKey.trim()} onClick={run}>
         Run request
       </RunButton>
       <Hint>
-        A real run against your key. It spends {ROYALTIES_PRICE} credits from the team balance, the same as a call from your own server
-        — the response below is what the API returned for the inputs above. A run that ends in an error costs nothing.
+        A real run against your key. It spends credits from the team balance, the same as a call from your own server — the
+        response below is what the API returned for the inputs above, and the result below says what it cost. A run that ends in an
+        error costs nothing.
       </Hint>
     </Shell>
   );
@@ -456,20 +523,20 @@ function RegistryConsole({ apiKey, onApiKeyChange, hidden }: ConsoleProps) {
       const body = streamBody(raw, last);
       if (last?.type !== "result") return setResult(streamError(t0, last, body, "The contract couldn't be parsed."));
       const terms = last.contract_terms as { parties: unknown[]; works: unknown[]; royalty_shares: unknown[] };
-      const splits = last.splits as { parties: SplitParty[]; main_artist_found: boolean };
+      const splits = last.splits as { main_artist: string | null; parties: SplitParty[] };
       setResult({
         badge: "200",
         ok: true,
         contentType: "text/event-stream",
-        meta: `${secs(t0)} · ${billed(REGISTRY_PRICE)}`,
+        meta: `${secs(t0)} · ${credits(last.billing as Billing)}`,
         summary: (
           <>
             <b className="text-[14px] text-foreground">{terms.parties.length}</b> parties · {terms.works.length} works ·{" "}
-            {terms.royalty_shares.length} shares{artist.trim() && !splits.main_artist_found ? " · main artist not found" : ""}
+            {terms.royalty_shares.length} shares{artist.trim() && !splits.main_artist ? " · main artist not found" : ""}
           </>
         ),
         rows: splits.parties.map((p) => ({
-          title: `${p.name}${p.is_main_artist ? " (main artist)" : ""}`,
+          title: `${p.name}${p.name === splits.main_artist ? " (main artist)" : ""}`,
           value: `${pct(p.master_pct)} master`,
           detail: `${p.role} · publishing ${pct(p.publishing_pct)}${p.soundexchange_pct ? ` · SoundExchange ${pct(p.soundexchange_pct)}` : ""}`,
         })),
@@ -506,18 +573,25 @@ function RegistryConsole({ apiKey, onApiKeyChange, hidden }: ConsoleProps) {
 
 function SplitSheetConsole({ apiKey, onApiKeyChange, hidden }: ConsoleProps) {
   const id = useId();
-  const [body, setBody] = useState(SPLIT_SHEET_SAMPLE);
+  const [sheet, setSheet] = useState({
+    work_title: SPLIT_SHEET_PRESET.work_title,
+    work_type: SPLIT_SHEET_PRESET.work_type,
+    split_type: SPLIT_SHEET_PRESET.split_type,
+    date: SPLIT_SHEET_PRESET.date,
+  });
   const [format, setFormat] = useState<"pdf" | "docx">("pdf");
+  const [contributors, setContributors] = useState<Row[]>(SPLIT_SHEET_PRESET.contributors);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<ConsoleResult | null>(null);
+  const setField = (key: keyof typeof sheet) => (e: { target: { value: string } }) => setSheet((s) => ({ ...s, [key]: e.target.value }));
+
+  const errors = validateRows(CONTRIBUTOR_COLS, contributors);
+  const titleMissing = !sheet.work_title.trim();
+  const dateMissing = !sheet.date.trim();
+  const body = { ...sheet, format, contributors: rowsToObjects(CONTRIBUTOR_COLS, contributors) };
 
   const run = async () => {
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(body);
-    } catch {
-      return setResult(notSent("The request body is not valid JSON"));
-    }
+    if (titleMissing || dateMissing || errors.length) return setResult(notSent("Fix the highlighted fields first"));
     setRunning(true);
     setResult((prev) => {
       if (prev?.download) URL.revokeObjectURL?.(prev.download.href);
@@ -528,18 +602,18 @@ function SplitSheetConsole({ apiKey, onApiKeyChange, hidden }: ConsoleProps) {
       const res = await fetch(`${PARTNER_API_URL}/splitsheet/v1/documents`, {
         method: "POST",
         headers: { ...auth(apiKey), "Content-Type": "application/json" },
-        body: JSON.stringify({ ...parsed, format }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) return setResult(await httpError(res, t0));
       const blob = await res.blob();
-      const title = String(parsed.work_title ?? "sheet").replace(/[^a-zA-Z0-9._-]/g, "_");
+      const title = sheet.work_title.replace(/[^a-zA-Z0-9._-]/g, "_");
       const name = `Split_Sheet_${title}.${format}`;
       const href = typeof URL.createObjectURL === "function" ? URL.createObjectURL(blob) : "";
       setResult({
         badge: "200",
         ok: true,
         contentType: format === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        meta: `${secs(t0)} · ${billed(SPLIT_SHEET_PRICE)}`,
+        meta: `${secs(t0)} · ${headerCredits(res)}`,
         summary: "The finished document. Save it, or open it to check the layout.",
         download: { href, name, bytes: blob.size },
       });
@@ -553,15 +627,38 @@ function SplitSheetConsole({ apiKey, onApiKeyChange, hidden }: ConsoleProps) {
   return (
     <Shell tag={`${SPLIT_SHEET_PRICE} credits`} hidden={hidden} result={result}>
       <KeyField value={apiKey} onChange={onApiKeyChange} />
-      <Field label="Request body" htmlFor={`${id}-body`}>
-        <textarea id={`${id}-body`} rows={12} value={body} onChange={(e) => setBody(e.target.value)} spellCheck={false} className={AREA} />
+      <Field label="work_title" htmlFor={`${id}-title`}>
+        <input id={`${id}-title`} type="text" value={sheet.work_title} onChange={setField("work_title")} aria-invalid={titleMissing} className={`${INPUT} ${titleMissing ? "border-destructive" : ""}`} />
+        {titleMissing && <p role="alert" className="mt-0.5 text-[11px] text-destructive">Work title is required</p>}
       </Field>
-      <Field label="format" htmlFor={`${id}-format`}>
-        <select id={`${id}-format`} value={format} onChange={(e) => setFormat(e.target.value as "pdf" | "docx")} className={SELECT}>
-          <option value="pdf">pdf</option>
-          <option value="docx">docx</option>
-        </select>
+      <Field label="date" htmlFor={`${id}-date`}>
+        <input id={`${id}-date`} type="text" value={sheet.date} onChange={setField("date")} aria-invalid={dateMissing} className={`${INPUT} ${dateMissing ? "border-destructive" : ""}`} />
+        {dateMissing && <p role="alert" className="mt-0.5 text-[11px] text-destructive">Date is required</p>}
       </Field>
+      <div className="grid grid-cols-3 gap-2">
+        <Field label="work_type" htmlFor={`${id}-type`}>
+          <select id={`${id}-type`} value={sheet.work_type} onChange={setField("work_type")} className={SELECT}>
+            <option value="single">single</option>
+            <option value="album">album</option>
+            <option value="ep">ep</option>
+          </select>
+        </Field>
+        <Field label="split_type" htmlFor={`${id}-split`}>
+          <select id={`${id}-split`} value={sheet.split_type} onChange={setField("split_type")} className={SELECT}>
+            <option value="both">both</option>
+            <option value="publishing">publishing</option>
+            <option value="master">master</option>
+          </select>
+        </Field>
+        <Field label="format" htmlFor={`${id}-format`}>
+          <select id={`${id}-format`} value={format} onChange={(e) => setFormat(e.target.value as "pdf" | "docx")} className={SELECT}>
+            <option value="pdf">pdf</option>
+            <option value="docx">docx</option>
+          </select>
+        </Field>
+      </div>
+      <RowsEditor label="Contributor" columns={CONTRIBUTOR_COLS} rows={contributors} onChange={setContributors} blank={() => ({ name: "", role: "", publishing_share: "", master_percentage: "" })} addLabel="Add contributor" errors={errors} />
+      <RequestPreview body={body} />
       <RunButton running={running} disabled={!apiKey.trim()} onClick={run}>
         Run request
       </RunButton>
@@ -597,7 +694,7 @@ function ZoeConsole({ apiKey, onApiKeyChange, hidden }: ConsoleProps) {
         badge: "200",
         ok: true,
         contentType: "application/json",
-        meta: `${secs(t0)} · ${billed(ZOE_PRICE)}`,
+        meta: `${secs(t0)} · ${credits(json?.billing as Billing)}`,
         body: pretty(json),
       });
     } catch {

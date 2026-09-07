@@ -42,6 +42,7 @@ import { OrgPoolCard } from "@/components/orgs/OrgPoolCard";
 import { OrgBillingPanel, adminName } from "@/components/orgs/OrgBillingPanel";
 import { OrgSeatsTable } from "@/components/orgs/OrgSeatsTable";
 import { OrgApiKeysPanel } from "@/components/orgs/OrgApiKeysPanel";
+import { OrgUsageAnalysis } from "@/components/orgs/OrgUsageAnalysis";
 import { OrgInvitesPanel } from "@/components/orgs/OrgInvitesPanel";
 import { OrgRequestsPanel } from "@/components/orgs/OrgRequestsPanel";
 import { OrgSettingsPanel } from "@/components/orgs/OrgSettingsPanel";
@@ -284,6 +285,7 @@ function AdminConsole({ orgId }: { orgId: string }) {
       <OrgPoolCard org={org} />
       {isSelfServe && <OrgBillingPanel org={org} />}
       <OrgSeatsTable orgId={orgId} currentUserId={user?.id} orgKind={org.kind} />
+      <OrgUsageAnalysis orgId={orgId} partnerApiEnabled={!!org.partner_api_enabled} />
       {org.partner_api_enabled ? <OrgApiKeysPanel orgId={orgId} /> : <ApiAccessTeaser />}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-[22px] items-start">
         <OrgInvitesPanel orgId={orgId} orgKind={org.kind} />

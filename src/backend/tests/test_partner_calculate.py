@@ -10,7 +10,7 @@ ORG_ID = "00000000-0000-0000-0000-0000000000aa"
 CTX = PartnerContext(org_id=ORG_ID, key_id="00000000-0000-0000-0000-0000000000bb")
 
 PERIOD = "2026-09-30T00:00:00+00:00"
-RESULT = {"payments": [], "total_payments": 0, "expense_review_required": False}
+RESULT = {"summary": {"payments": 0, "total_payable": 0.0, "expense_review_required": False}, "payments": []}
 TERMS = json.dumps(
     {
         "parties": [{"name": "A", "role": "artist"}],
@@ -31,6 +31,7 @@ def partner(monkeypatch):
         "partner_api.router.psvc.check_pool",
         lambda sb, org, price: {"ok": True, "balance": 100, "wallet_id": "w1", "period_end": PERIOD},
     )
+    monkeypatch.setattr("partner_api.router.psvc.already_charged", lambda sb, rid: False)
 
 
 def _post(client, files=None, data=None, headers=None):
@@ -90,6 +91,8 @@ def test_success_streams_result_and_debits(client, partner, monkeypatch):
     assert "text/event-stream" in r.headers["content-type"]
     events = [json.loads(line[6:]) for line in r.text.splitlines() if line.startswith("data: ")]
     assert events[-1]["type"] == "result"
+    assert events[-1]["summary"] == RESULT["summary"]
+    assert events[-1]["billing"] == {"credits": 30, "request_id": debits[0]["request_id"]}
     assert debits and debits[0]["amount"] == 30
     assert debits[0]["metadata"]["base"] == 30  # compute_charge metadata rides on the debit
 
@@ -122,6 +125,23 @@ def test_request_id_is_scoped_to_the_pools_billing_period(client, partner, monke
     assert debits[1]["request_id"] != debits[0]["request_id"]
 
 
+def test_replay_under_idempotency_key_reports_zero_credits(client, partner, monkeypatch):
+    monkeypatch.setattr("partner_api.router.psvc.run_partner_calc", lambda sb, **kw: (dict(RESULT), None, None))
+    debits = []
+    monkeypatch.setattr("partner_api.router.psvc.debit_run", lambda sb, **kw: debits.append(kw))
+    asked = []
+    monkeypatch.setattr("partner_api.router.psvc.already_charged", lambda sb, rid: asked.append(rid) or True)
+    r = _post(client, headers={"Idempotency-Key": "retry-1"})
+    event = [json.loads(line[6:]) for line in r.text.splitlines() if line.startswith("data: ")][-1]
+    assert event["billing"] == {"credits": 0, "request_id": asked[0], "replayed": True}
+    # The debit RPC is the authority and still runs at the full amount — the
+    # read only reports; debit_credits' own dedupe is what makes it a no-op.
+    assert debits[0]["amount"] == 30
+    # No header => a fresh uuid4 that cannot have been charged: the read is skipped.
+    _post(client)
+    assert len(asked) == 1
+
+
 def test_metered_cost_above_base_charges_metered(client, partner, monkeypatch):
     # The ONE wiring proof that measured/usage reach compute_charge. The
     # formula's other terms (size tail, unmeasured -> base) are pinned in
@@ -129,9 +149,11 @@ def test_metered_cost_above_base_charges_metered(client, partner, monkeypatch):
     monkeypatch.setattr("partner_api.router.psvc.run_partner_calc", lambda sb, **kw: (dict(RESULT), 45, {}))
     debits = []
     monkeypatch.setattr("partner_api.router.psvc.debit_run", lambda sb, **kw: debits.append(kw))
-    _post(client)
+    r = _post(client)
     assert debits[0]["amount"] == 45  # metered beat the 30-credit base
     assert debits[0]["metadata"]["metered"] is True
+    events = [json.loads(line[6:]) for line in r.text.splitlines() if line.startswith("data: ")]
+    assert events[-1]["billing"]["credits"] == 45  # the body reports THE charge, not the base
 
 
 def test_calculation_error_is_terminal_sse_event(client, partner, monkeypatch):
@@ -155,6 +177,7 @@ def test_calculation_error_is_terminal_sse_event(client, partner, monkeypatch):
         "message": "No songs matched.",
         "suggestion": "Check the statement titles.",
         "details": {"contract_works": ["A"]},
+        "billing": {"credits": 0},
     }
     debit.assert_not_called()
 

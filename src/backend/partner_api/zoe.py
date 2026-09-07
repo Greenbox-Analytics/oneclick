@@ -16,7 +16,10 @@ the JSON body is yielded, or after the last content chunk and before the
 terminal `stop` + [DONE] frames on a stream (a client that drops mid-answer
 closes the generator there and is never charged). Every completion pays at
 least the base: the product's free "conversational" fast path is a UI nicety
-the API does not have.
+the API does not have. Every delivered body, and the stream's final `stop`
+frame, carries `billing` (credits + request id). OpenAI's `usage` token block
+is not sent — partners are told what a call cost, not how many tokens it
+burned.
 """
 
 import asyncio
@@ -107,25 +110,31 @@ def _llm_kwargs(req: ChatCompletionRequest) -> dict:
     return kw
 
 
-def _bill(sb, ctx: PartnerContext, pool: dict, price: int, measured, usage) -> int:
-    """Charge-on-delivery through THE charge formula. No idempotency: a chat
-    completion has no natural request identity (OpenAI has none either), so
-    every delivered answer pays. A debit failure never turns a delivered answer
-    into a partner-visible error — log loudly."""
-    charge, meta = compute_charge(ZOE_ACTION, price, measured, usage)
+def _charge_for(price: int, measured, usage) -> tuple[int, dict]:
+    """THE charge formula (ai_pricing.compute_charge), computed before the
+    frame that reports it. Never a local max()."""
+    return compute_charge(ZOE_ACTION, price, measured, usage)
+
+
+def _debit(sb, ctx: PartnerContext, pool: dict, charge: int, meta: dict, request_id: str) -> None:
+    """Charge-on-delivery. No idempotency: a chat completion has no natural
+    request identity (OpenAI has none either), so every delivered answer pays.
+    A debit failure never turns a delivered answer into a partner-visible
+    error — log loudly. The number the partner was shown is the charge as
+    computed; if the RPC fails the ledger never records it — fail-open on the
+    request path, by design."""
     try:
         psvc.debit_run(
             sb,
             wallet_id=pool["wallet_id"],
             amount=charge,
-            request_id=str(uuid.uuid4()),
+            request_id=request_id,
             key_id=ctx.key_id,
             metadata=meta,
             action=ZOE_ACTION,
         )
     except Exception:
         logging.exception("partner zoe debit failed org=%s key=%s", ctx.org_id, ctx.key_id)
-    return charge
 
 
 # ---- non-streaming -----------------------------------------------------------
@@ -143,9 +152,6 @@ def complete(org_id: str, req: ChatCompletionRequest) -> tuple[dict, int | None,
         )
         measured, usage = credits_for_llm_usage(), llm_usage_snapshot()
     choice = resp.choices[0]
-    u = getattr(resp, "usage", None)
-    prompt_tokens = int(getattr(u, "prompt_tokens", 0) or 0)
-    completion_tokens = int(getattr(u, "completion_tokens", 0) or 0)
     body = {
         "id": f"chatcmpl-{uuid.uuid4().hex}",
         "object": "chat.completion",
@@ -158,11 +164,6 @@ def complete(org_id: str, req: ChatCompletionRequest) -> tuple[dict, int | None,
                 "finish_reason": choice.finish_reason or "stop",
             }
         ],
-        "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        },
     }
     return body, measured, usage
 
@@ -179,16 +180,17 @@ def _stream(sb, ctx: PartnerContext, pool: dict, price: int, req: ChatCompletion
 
     cid, created = f"chatcmpl-{uuid.uuid4().hex}", int(time.time())
 
-    def frame(delta: dict, finish: str | None = None) -> str:
-        return _sse(
-            {
-                "id": cid,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": MODEL_ID,
-                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
-            }
-        )
+    def frame(delta: dict, finish: str | None = None, billing: dict | None = None) -> str:
+        payload = {
+            "id": cid,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": MODEL_ID,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+        }
+        if billing is not None:
+            payload["billing"] = billing
+        return _sse(payload)
 
     try:
         stream = get_openai_client().chat.completions.create(
@@ -210,16 +212,19 @@ def _stream(sb, ctx: PartnerContext, pool: dict, price: int, req: ChatCompletion
                     "message": "Zoe couldn't answer just now. Try again.",
                     "type": "server_error",
                     "code": "zoe_failed",
-                }
+                },
+                "billing": psvc.unbilled(),
             }
         )
         yield "data: [DONE]\n\n"
         return
     # The whole answer is on the wire: bill, then close. A client that dropped
     # mid-answer raised GeneratorExit at a yield above and never reaches here.
-    charge = _bill(sb, ctx, pool, price, credits_for_llm_usage(), llm_usage_snapshot())
+    request_id = str(uuid.uuid4())
+    charge, meta = _charge_for(price, credits_for_llm_usage(), llm_usage_snapshot())
+    _debit(sb, ctx, pool, charge, meta, request_id)
     analytics_capture(ctx.org_id, "partner_zoe_completed", {"charged": charge, "stream": True})
-    yield frame({}, finish="stop")
+    yield frame({}, finish="stop", billing=psvc.billing_block(charge, request_id))
     yield "data: [DONE]\n\n"
 
 
@@ -259,11 +264,15 @@ async def zoe_chat_completions(req: ChatCompletionRequest, ctx: PartnerContext =
         analytics_capture(ctx.org_id, "partner_zoe_failed", {"error_code": "internal_error", "stream": False})
         raise HTTPException(status_code=502, detail={"code": "zoe_failed"}) from None
 
+    request_id = str(uuid.uuid4())
+    charge, meta = _charge_for(price, measured, usage)
+    body["billing"] = psvc.billing_block(charge, request_id)
+
     async def deliver():
         # The body is ONE frame: yield it, then bill — same rule as the
         # calculation stream. Nothing below runs for a client that is gone.
         yield json.dumps(body)
-        charge = _bill(sb, ctx, pool, price, measured, usage)
+        _debit(sb, ctx, pool, charge, meta, request_id)
         analytics_capture(ctx.org_id, "partner_zoe_completed", {"charged": charge, "stream": False})
 
     return StreamingResponse(deliver(), media_type="application/json")

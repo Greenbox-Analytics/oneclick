@@ -13,7 +13,8 @@ never widens into anyone's stored documents.
 Same shape as the calculation endpoint: multipart in, SSE out (heartbeats
 while the parse runs), priced by credit_prices.partner_registry_parse through
 ai_pricing.compute_charge (base / metered tail), debited ONLY after the result
-frame is on the wire, idempotent under Idempotency-Key.
+frame is on the wire (the frame reports it in `billing`), idempotent under
+Idempotency-Key.
 """
 
 import asyncio
@@ -128,20 +129,29 @@ async def partner_splits(
                         "and isn't empty."
                     ),
                     "details": {"reason": str(e)},
+                    "billing": psvc.unbilled(),
                 }
             )
             return
         except Exception:
             logging.exception("partner parse failed org=%s key=%s request_id=%s", ctx.org_id, ctx.key_id, request_id)
             analytics_capture(ctx.org_id, "partner_registry_parse_failed", {"error_code": "internal_error"})
-            yield _sse({"type": "error", "code": "internal_error", "request_id": request_id})
+            yield _sse(
+                {"type": "error", "code": "internal_error", "request_id": request_id, "billing": psvc.unbilled()}
+            )
             return
-        yield _sse({"type": "result", **result})
+        # THE charge formula, computed BEFORE the frame so the body can report
+        # what this call costs; the debit still runs after the frame (below).
+        # A replay under an Idempotency-Key was charged on its first run — the
+        # debit RPC dedupes it — so the body says so instead of repeating the price.
+        charge, charge_meta = compute_charge(psvc.REGISTRY_ACTION, price, measured, usage)
+        replayed = bool(idempotency_key) and psvc.already_charged(sb, request_id)
+        billing = psvc.billing_block(charge, request_id, replayed=replayed)
+        yield _sse({"type": "result", **result, "billing": billing})
         # Bill only AFTER the result is on the wire — a client that dropped
         # closed the generator at the yield above and is never charged. THE
         # charge formula, never a local max(); a debit failure is logged, not
         # surfaced, because the deliverable already went out.
-        charge, charge_meta = compute_charge(psvc.REGISTRY_ACTION, price, measured, usage)
         try:
             psvc.debit_run(
                 sb,
@@ -157,7 +167,11 @@ async def partner_splits(
         analytics_capture(
             ctx.org_id,
             "partner_registry_parse_completed",
-            {"party_count": len(result["splits"].get("parties", [])), "charged": charge},
+            {
+                "party_count": len(result["splits"].get("parties", [])),
+                "charged": billing["credits"],
+                "replayed": replayed,
+            },
         )
 
     return StreamingResponse(generate(), media_type="text/event-stream")

@@ -146,3 +146,11 @@ def test_admin_mints_lists_revokes_keys_on_product_host(client, monkeypatch, moc
         assert r.status_code == 422
     finally:
         main.app.dependency_overrides.pop(require_admin, None)
+
+
+def test_cors_exposes_the_billing_headers_to_browsers(client):
+    # The docs console reads Msanii-Credits cross-origin; without expose_headers
+    # a browser hides every custom response header. Behavioural, not introspective.
+    r = client.get("/health", headers={"Origin": "http://localhost:8080"})
+    exposed = {h.strip() for h in r.headers["access-control-expose-headers"].split(",")}
+    assert {"Msanii-Credits", "Msanii-Request-Id", "Msanii-Replayed", "Content-Disposition"} <= exposed

@@ -45,15 +45,31 @@ def _debit(key_id, delta, created, source="partner_api", member=None):
 # ---- get_org_usage.byKey ----------------------------------------------------
 
 
-def _usage_db(ledger):
+def _key_row(key_id, label):
+    return {
+        "id": key_id,
+        "label": label,
+        "key_prefix": "mk_live_" + label.lower(),
+        "status": "active",
+        "expires_at": None,
+        "revoked_at": None,
+        "folder_id": None,
+        "created_by": None,
+    }
+
+
+def _usage_db(ledger, keys=()):
     """Table-mocked db for orgs.service.get_org_usage, mirroring
     test_orgs_router.TestGetOrgUsageService._db: one fixed response per
     table. MockQueryBuilder.range() returns itself, so fetch_all's one page
     is this one execute()."""
+    keys = list(keys)
 
     def _side(name):
         b = MockQueryBuilder()
-        if name == "org_members":
+        if name == "partner_api_keys":
+            b.execute.return_value = MagicMock(data=keys, count=len(keys))
+        elif name == "org_members":
             b.execute.return_value = MagicMock(data=[MEMBER], count=1)
         elif name == "credit_wallets":
             b.execute.return_value = MagicMock(data=[WALLET], count=1)
@@ -90,12 +106,29 @@ async def test_get_org_usage_by_key_groups_partner_rows_only(monkeypatch):
             "created_at": "2026-09-01T00:00:00+00:00",
         },
     ]
-    out = await orgs_service.get_org_usage(_usage_db(rows), U_ADMIN, ORG_ID)
+    # byKey is one row per key that EXISTS, so the keys table is what lists
+    # them; the ledger only decides the numbers on each row.
+    keys = [_key_row(KEY_A, "A"), _key_row(KEY_B, "B"), _key_row(KEY_C, "C"), _key_row(KEY_D, "D")]
+    out = await orgs_service.get_org_usage(_usage_db(rows, keys), U_ADMIN, ORG_ID)
     by_id = {k["keyId"]: k for k in out["byKey"]}
-    assert by_id[KEY_A] == {"keyId": KEY_A, "credits": 67, "runs": 2, "lastUsedAt": "2026-09-05T10:00:00+00:00"}
-    assert by_id[KEY_B] == {"keyId": KEY_B, "credits": 30, "runs": 1, "lastUsedAt": "2026-09-03T10:00:00+00:00"}
-    # Member spend, product-source rows and non-debit rows all stay out.
-    assert set(by_id) == {KEY_A, KEY_B}
+    assert by_id[KEY_A] == {
+        "keyId": KEY_A,
+        "label": "A",
+        "keyPrefix": "mk_live_a",
+        "status": "active",
+        "folderId": None,
+        "folderName": None,
+        "credits": 67,
+        "runs": 2,
+        "lastUsedAt": "2026-09-05T10:00:00+00:00",
+        "byAction": [],
+        # These fixture debits carry no action, so nothing is plottable.
+        "series": [],
+    }
+    assert by_id[KEY_B]["credits"] == 30 and by_id[KEY_B]["lastUsedAt"] == "2026-09-03T10:00:00+00:00"
+    # Member spend, product-source rows and non-debit rows all stay out: the
+    # keys are listed, but with nothing charged to them.
+    assert (by_id[KEY_C]["credits"], by_id[KEY_D]["credits"]) == (0, 0)
     assert out["byKey"][0]["keyId"] == KEY_A  # credits desc
     # ...and partner spend never lands in a seat: the one member spent 5.
     assert [s["spentThisPeriod"] for s in out["seats"]] == [5]

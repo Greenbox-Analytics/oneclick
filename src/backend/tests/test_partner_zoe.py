@@ -93,7 +93,7 @@ def test_non_stream_is_openai_shaped_and_bills_the_base_after_delivery(client, p
     assert body["object"] == "chat.completion" and body["model"] == "zoe"
     assert body["choices"][0]["message"] == {"role": "assistant", "content": openai.answer}
     assert body["choices"][0]["finish_reason"] == "stop"
-    assert body["usage"] == {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
+    assert "usage" not in body  # credits, not tokens
     assert body["id"].startswith("chatcmpl-")
     # Our persona leads; the partner's messages follow verbatim.
     sent = openai.calls[0]["messages"]
@@ -106,6 +106,7 @@ def test_non_stream_is_openai_shaped_and_bills_the_base_after_delivery(client, p
     assert debits[0]["action"] == "partner_zoe_message"
     assert debits[0]["amount"] == 5
     assert debits[0]["wallet_id"] == "w1" and debits[0]["key_id"] == "k-1"
+    assert body["billing"] == {"credits": 5, "request_id": debits[0]["request_id"]}
 
 
 def test_stream_emits_openai_chunks_bills_after_content_and_ends_with_done(client, partner, openai, monkeypatch):
@@ -131,6 +132,34 @@ def test_stream_emits_openai_chunks_bills_after_content_and_ends_with_done(clien
     assert len({c["id"] for c in chunks}) == 1
     assert openai.calls[0]["stream"] is True
     assert len(seen) == 1 and seen[0]["action"] == "partner_zoe_message" and seen[0]["amount"] == 5
+    assert chunks[-1]["billing"] == {"credits": 5, "request_id": seen[0]["request_id"]}
+    assert all("billing" not in c for c in chunks[:-1])
+
+
+def test_stream_client_drop_is_never_billed(partner, openai, debits):
+    # TestClient drains the response, so drive the generator directly —
+    # exactly what Starlette does when a client disconnects mid-stream.
+    from utils.llm.tracking import iter_with_llm_context
+
+    req = zoe.ChatCompletionRequest.model_validate({**ASK, "stream": True})
+    pool = {"ok": True, "balance": 100, "wallet_id": "w1", "period_end": None}
+    sb = object()
+
+    gen = iter_with_llm_context(CTX.org_id, zoe.TRACKING_TOOL, zoe._stream(sb, CTX, pool, 5, req))
+    next(gen)
+    next(gen)
+    gen.close()
+    assert debits == []
+
+    # A fresh, fully-drained stream still debits exactly once, and the stop
+    # frame reports the same request_id the debit was recorded under.
+    openai.stream = FakeStream(["A mechanical ", "royalty is paid ", "per reproduction."])
+    events = []
+    for item in iter_with_llm_context(CTX.org_id, zoe.TRACKING_TOOL, zoe._stream(sb, CTX, pool, 5, req)):
+        events.extend(line[6:] for line in item.splitlines() if line.startswith("data: "))
+    assert len(debits) == 1
+    chunks = [json.loads(e) for e in events if e != "[DONE]"]
+    assert chunks[-1]["billing"]["request_id"] == debits[0]["request_id"]
 
 
 def test_dry_pool_is_402_before_any_model_call(client, partner, openai, debits, monkeypatch):
@@ -156,7 +185,8 @@ def test_stream_failure_is_an_error_frame_and_unbilled(client, partner, debits, 
     r = client.post(URL, headers=H, json={**ASK, "stream": True})
     assert r.status_code == 200
     events = _sse_events(r.text)
-    assert json.loads(events[0])["error"]["code"] == "zoe_failed"
+    frame = json.loads(events[0])
+    assert frame["error"]["code"] == "zoe_failed" and frame["billing"] == {"credits": 0}
     assert events[-1] == "[DONE]"
     assert debits == []
 

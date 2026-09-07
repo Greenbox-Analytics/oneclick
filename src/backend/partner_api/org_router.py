@@ -14,7 +14,7 @@ from auth import get_current_user_id
 from orgs import authz
 from orgs import service as orgs_service
 from partner_api import service as psvc
-from partner_api.models import PartnerKeyCreate
+from partner_api.models import KeyFolderAssign, KeyFolderCreate, PartnerKeyCreate
 from subscriptions.service import credits_enabled, licensing_enabled
 
 
@@ -60,15 +60,12 @@ def _gate(sb, user_id: str, org_id: str, *, mutating: bool) -> dict:
 
 @router.get("/{org_id}/partner-keys")
 async def list_org_partner_keys(org_id: str, user_id: str = Depends(get_current_user_id)) -> dict:
-    """Every key of the org. list_keys selects explicit columns, so
-    secrets/hashes can't appear."""
+    """The org's listed keys (long-inactive ones are hidden, never deleted)
+    plus its folders. list_keys selects explicit columns, so secrets/hashes
+    can't appear."""
     sb = _get_supabase()
     _gate(sb, user_id, org_id, mutating=False)
-    keys = psvc.list_keys(sb, org_id)
-    labels = psvc.created_by_labels(sb, org_id, keys)
-    for k in keys:
-        k["created_by_label"] = labels.get(k["created_by"]) if k.get("created_by") else None
-    return {"keys": keys}
+    return psvc.key_console(sb, org_id)
 
 
 @router.post("/{org_id}/partner-keys")
@@ -79,15 +76,52 @@ async def create_org_partner_key(
     carries the plaintext secret EXACTLY ONCE."""
     sb = _get_supabase()
     _gate(sb, user_id, org_id, mutating=True)
-    key = psvc.mint_key(
-        sb,
-        org_id,
-        label=body.label,
-        created_by=user_id,
-        expires_at=body.expires_at.isoformat() if body.expires_at else None,
-    )
+    try:
+        key = psvc.mint_key(
+            sb,
+            org_id,
+            label=body.label,
+            created_by=user_id,
+            expires_at=body.expires_at.isoformat() if body.expires_at else None,
+            folder_id=body.folder_id,
+        )
+    except ValueError:
+        raise HTTPException(status_code=422, detail={"code": "unknown_folder"})
     analytics_capture(user_id, "partner_key_created", {"org_id": org_id, "via": "portal"})
     return key
+
+
+@router.post("/{org_id}/partner-key-folders", status_code=201)
+async def create_org_key_folder(
+    org_id: str, body: KeyFolderCreate, user_id: str = Depends(get_current_user_id)
+) -> dict:
+    """Idempotent on the name — an existing folder comes back as-is, and only
+    a real insert is worth an analytics event."""
+    sb = _get_supabase()
+    _gate(sb, user_id, org_id, mutating=True)
+    try:
+        folder = psvc.create_folder(sb, org_id, body.name)
+    except ValueError:
+        raise HTTPException(status_code=422, detail={"code": "invalid_folder_name"})
+    if folder.pop("created", False):
+        analytics_capture(user_id, "partner_key_folder_created", {"org_id": org_id, "via": "portal"})
+    return folder
+
+
+@router.put("/{org_id}/partner-keys/{key_id}/folder")
+async def set_org_key_folder(
+    org_id: str, key_id: str, body: KeyFolderAssign, user_id: str = Depends(get_current_user_id)
+) -> dict:
+    """Move a key between folders (null = unfile it). Spend follows the key's
+    CURRENT folder, so this moves its history too. One write; the folder is
+    re-read only to tell "unknown folder" (422) from "not your key" (404)."""
+    sb = _get_supabase()
+    _gate(sb, user_id, org_id, mutating=True)
+    if not psvc.set_key_folder(sb, org_id, key_id, body.folder_id):
+        if body.folder_id is not None and not psvc.folder_belongs(sb, org_id, body.folder_id):
+            raise HTTPException(status_code=422, detail={"code": "unknown_folder"})
+        raise HTTPException(status_code=404, detail="Key not found")
+    return {"ok": True}
 
 
 @router.delete("/{org_id}/partner-keys/{key_id}")

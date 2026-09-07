@@ -25,18 +25,16 @@ PARSED = {
         "default_basis": None,
     },
     "splits": {
+        "main_artist": None,
         "parties": [
             {
                 "name": "Jane Doe",
                 "role": "producer",
-                "aliases": [],
                 "master_pct": 50.0,
                 "publishing_pct": 0.0,
                 "soundexchange_pct": 0.0,
-                "is_main_artist": False,
             }
         ],
-        "main_artist_found": False,
     },
 }
 
@@ -52,6 +50,7 @@ def partner(monkeypatch):
         "partner_api.service.check_pool",
         lambda sb, org, price: {"ok": True, "balance": 100, "wallet_id": "w1", "period_end": PERIOD},
     )
+    monkeypatch.setattr("partner_api.service.already_charged", lambda sb, rid: False)
 
 
 @pytest.fixture
@@ -125,6 +124,7 @@ def test_result_event_carries_both_views_and_bills_the_registry_row(client, part
     assert len(debits) == 1
     assert debits[0]["action"] == "partner_registry_parse" and debits[0]["amount"] == 30
     assert debits[0]["wallet_id"] == "w1" and debits[0]["key_id"] == CTX.key_id
+    assert event["billing"] == {"credits": 30, "request_id": debits[0]["request_id"]}
 
 
 def test_idempotency_key_binds_files_and_artist(client, partner, parsed, debits):
@@ -151,6 +151,7 @@ def test_unreadable_contract_is_an_error_event_and_unbilled(client, partner, deb
     assert event["type"] == "error" and event["code"] == "CONTRACT_UNREADABLE"
     assert event["details"] == {"reason": "no extractable text"}
     assert event["suggestion"]
+    assert event["billing"] == {"credits": 0}
     assert debits == []
 
 
@@ -160,4 +161,17 @@ def test_internal_error_event_carries_request_id_and_is_unbilled(client, partner
     (event,) = _events(r.text)
     assert event["type"] == "error" and event["code"] == "internal_error"
     assert event["request_id"]
+    assert event["billing"] == {"credits": 0}
     assert debits == []
+
+
+def test_replay_under_idempotency_key_reports_zero_credits(client, partner, parsed, debits, monkeypatch):
+    asked = []
+    monkeypatch.setattr("partner_api.service.already_charged", lambda sb, rid: asked.append(rid) or True)
+    r = _post(client, headers={"Idempotency-Key": "k1"})
+    (event,) = _events(r.text)
+    assert event["billing"] == {"credits": 0, "request_id": asked[0], "replayed": True}
+    assert debits[0]["request_id"] == asked[0]
+    # No header => a fresh uuid4 that cannot have been charged: the read is skipped.
+    _post(client)
+    assert len(asked) == 1

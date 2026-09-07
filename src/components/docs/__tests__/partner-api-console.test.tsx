@@ -103,46 +103,63 @@ describe("PartnerApiConsole — check", () => {
 describe("PartnerApiConsole — royalties", () => {
   const RESULT = {
     type: "result",
+    summary: { payments: 1, total_payable: 400, expense_review_required: true },
     payments: [
-      { song_title: "Blue Sky", party_name: "Jane Doe", role: "producer", royalty_type: "master", percentage: 50, basis: "net",
-        gross_amount: 1000, expenses_applied: 200, net_amount: 800, amount_to_pay: 400, terms: null },
+      { song: "Blue Sky", payee: { name: "Jane Doe", role: "producer" }, share: { type: "master", percentage: 50, basis: "net" },
+        amounts: { gross: 1000, expenses: 200, net: 800, payable: 400 } },
     ],
-    total_payments: 1,
-    expense_review_required: true,
+    billing: { credits: 30, request_id: "r1" },
   };
 
-  it("sends one multipart POST with the statement as a file and contract_terms, then reads the stream", async () => {
+  it("sends one multipart POST with the statement as a file and contract_terms built from rows, then reads the stream", async () => {
     fetchMock().mockResolvedValueOnce(sseResponse(`: ping\n\ndata: ${JSON.stringify(RESULT)}\n\n`));
     await mount("royalties");
     const v = visible();
     fireEvent.change(v.getByLabelText("Sample input"), { target: { value: "exp" } });
+    // A second party, typed into rows — never into JSON.
+    fireEvent.click(v.getByRole("button", { name: "Add party" }));
+    fireEvent.change(v.getByLabelText("Party 2 Name"), { target: { value: "Sam Ray" } });
+    fireEvent.change(v.getByLabelText("Party 2 Role"), { target: { value: "writer" } });
+    const preview = JSON.parse(v.getByLabelText("Request body").textContent!);
+    expect(preview.contract_terms.parties).toEqual([{ name: "Jane Doe", role: "producer" }, { name: "Sam Ray", role: "writer" }]);
     run(v);
 
     await waitFor(() => expect(status(v)).toBeInTheDocument());
-    // One request: the calculation itself. No balance reads — the API has none.
     expect(fetchMock()).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock().mock.calls[0];
     expect(url).toBe(`${BASE}/oneclick/v1/royalties`);
     expect(init.method).toBe("POST");
     expect(init.headers.Authorization).toBe("Bearer mk_live_secret");
     const form = init.body as FormData;
-    expect(form).toBeInstanceOf(FormData);
     expect((form.get("statement") as File).name).toBe("statement.csv");
-    expect(form.getAll("contracts")).toHaveLength(0); // exactly one of the two
-    expect(JSON.parse(form.get("contract_terms") as string).works[0].title).toBe("Blue Sky");
-    expect(JSON.parse(form.get("expenses") as string)[0].work_titles).toEqual(["Blue Sky"]);
-    // The response is rendered from what came back, never computed locally.
+    expect(form.getAll("contracts")).toHaveLength(0);
+    // The preview IS the body sent.
+    expect(JSON.parse(form.get("contract_terms") as string)).toEqual(preview.contract_terms);
+    expect(JSON.parse(form.get("expenses") as string)).toEqual([{ description: "Studio time", amount: 200, work_titles: ["Blue Sky"] }]);
     const s = status(v).textContent;
     expect(s).toContain("400.00");
     expect(s).toContain("review flagged");
+    expect(s).toContain("Blue Sky — Jane Doe");
     expect(s).toContain("50% of net 800.00 (after 200.00 expenses)");
-    // The charge is labelled as the base, never invented: the ledger has the real number.
-    expect(s).toContain("billed (base 30)");
+    // The charge comes from the response, never from a local price table.
+    expect(s).toContain("30 credits");
+    expect(s).not.toContain("base");
+  });
+
+  it("blocks the send on an invalid row and says which cell", async () => {
+    await mount("royalties");
+    const v = visible();
+    fireEvent.change(v.getByLabelText("Share 1 %"), { target: { value: "150" } });
+    expect(v.getByRole("alert")).toHaveTextContent("% must be between 0 and 100");
+    run(v);
+    await waitFor(() => expect(status(v)).toBeInTheDocument());
+    expect(status(v).textContent).toContain("Fix the highlighted fields");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   it("shows a stream error event as unbilled", async () => {
     fetchMock().mockResolvedValueOnce(
-      sseResponse(`data: ${JSON.stringify({ type: "error", code: "NO_SONG_MATCHES", message: "The contract covers songs that don't appear in this royalty statement.", suggestion: "…", details: {} })}\n\n`)
+      sseResponse(`data: ${JSON.stringify({ type: "error", code: "NO_SONG_MATCHES", message: "The contract covers songs that don't appear in this royalty statement.", suggestion: "…", details: {}, billing: { credits: 0 } })}\n\n`)
     );
     await mount("royalties");
     const v = visible();
@@ -150,18 +167,30 @@ describe("PartnerApiConsole — royalties", () => {
     run(v);
     await waitFor(() => expect(status(v)).toBeInTheDocument());
     expect(status(v).textContent).toContain("no credits spent");
-    expect(status(v).textContent).toContain("don't appear in this royalty statement");
     expect(status(v).textContent).toContain("NO_SONG_MATCHES");
   });
 
-  it("does not send malformed contract_terms", async () => {
+  it("labels a replay as not charged again", async () => {
+    fetchMock().mockResolvedValueOnce(sseResponse(`data: ${JSON.stringify({ ...RESULT, billing: { credits: 0, replayed: true, request_id: "r1" } })}\n\n`));
     await mount("royalties");
     const v = visible();
-    fireEvent.change(v.getByLabelText("contract_terms"), { target: { value: "{not json" } });
     run(v);
     await waitFor(() => expect(status(v)).toBeInTheDocument());
-    expect(status(v).textContent).toContain("contract_terms is not valid JSON");
-    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(status(v).textContent).toContain("replay · 0 credits");
+  });
+
+  it("still reports the charge when the result frame carries no summary", async () => {
+    const { summary, ...noSummary } = RESULT;
+    fetchMock().mockResolvedValueOnce(sseResponse(`data: ${JSON.stringify(noSummary)}\n\n`));
+    await mount("royalties");
+    const v = visible();
+    run(v);
+    await waitFor(() => expect(status(v)).toBeInTheDocument());
+    const s = status(v).textContent;
+    expect(s).toContain("400.00");
+    expect(s).toContain("review flagged");
+    expect(s).toContain("30 credits");
+    expect(s).not.toContain("no credits spent");
   });
 
   it("switches to a PDF picker for the PDF preset and drops contract_terms", async () => {
@@ -169,7 +198,7 @@ describe("PartnerApiConsole — royalties", () => {
     const v = visible();
     fireEvent.change(v.getByLabelText("Sample input"), { target: { value: "pdf" } });
     expect(v.getByLabelText("contracts")).toHaveAttribute("type", "file");
-    expect(v.queryByLabelText("contract_terms")).not.toBeInTheDocument();
+    expect(v.queryByLabelText("Party 1 Name")).not.toBeInTheDocument();
     run(v);
     await waitFor(() => expect(status(v)).toBeInTheDocument());
     expect(status(v).textContent).toContain("Choose at least one contract PDF");
@@ -190,15 +219,15 @@ describe("PartnerApiConsole — registry", () => {
   const RESULT = {
     type: "result",
     contract_terms: { parties: [{ name: "Jane Doe", role: "producer", aliases: [] }], works: [{ title: "Blue Sky" }], royalty_shares: [{ party_name: "Jane Doe", royalty_type: "master", percentage: 50 }] },
-    splits: { parties: [{ name: "Jane Doe", role: "producer", aliases: [], master_pct: 50, publishing_pct: 0, soundexchange_pct: 0, is_main_artist: true }], main_artist_found: true },
+    splits: { main_artist: "Jane Doe", parties: [{ name: "Jane Doe", role: "producer", master_pct: 50, publishing_pct: 0, soundexchange_pct: 0 }] },
+    billing: { credits: 30, request_id: "r2" },
   };
 
   it("posts the PDFs and the main artist, and renders both views", async () => {
     fetchMock().mockResolvedValueOnce(sseResponse(`: ping\n\ndata: ${JSON.stringify(RESULT)}\n\n`));
     await mount("registry");
     const v = visible();
-    const pdf = new File(["%PDF-1.4"], "deal.pdf", { type: "application/pdf" });
-    fireEvent.change(v.getByLabelText("contracts"), { target: { files: [pdf] } });
+    fireEvent.change(v.getByLabelText("contracts"), { target: { files: [new File(["%PDF-1.4"], "deal.pdf", { type: "application/pdf" })] } });
     fireEvent.change(v.getByLabelText(/main_artist_name/), { target: { value: "Jane Doe" } });
     run(v);
 
@@ -212,7 +241,19 @@ describe("PartnerApiConsole — registry", () => {
     expect(s).toContain("1 parties · 1 works · 1 shares");
     expect(s).toContain("Jane Doe (main artist)");
     expect(s).toContain("50% master");
-    expect(s).toContain("billed (base 30)");
+    expect(s).toContain("30 credits");
+  });
+
+  it("says when the main artist was not found", async () => {
+    fetchMock().mockResolvedValueOnce(sseResponse(`data: ${JSON.stringify({ ...RESULT, splits: { ...RESULT.splits, main_artist: null } })}\n\n`));
+    await mount("registry");
+    const v = visible();
+    fireEvent.change(v.getByLabelText("contracts"), { target: { files: [new File(["x"], "deal.pdf")] } });
+    fireEvent.change(v.getByLabelText(/main_artist_name/), { target: { value: "Nobody" } });
+    run(v);
+    await waitFor(() => expect(status(v)).toBeInTheDocument());
+    expect(status(v).textContent).toContain("main artist not found");
+    expect(status(v).textContent).not.toContain("(main artist)");
   });
 
   it("refuses to send without a PDF", async () => {
@@ -226,7 +267,7 @@ describe("PartnerApiConsole — registry", () => {
 
   it("shows an unreadable contract as an unbilled error event", async () => {
     fetchMock().mockResolvedValueOnce(
-      sseResponse(`data: ${JSON.stringify({ type: "error", code: "CONTRACT_UNREADABLE", message: "We couldn't read this contract.", suggestion: "…", details: { reason: "no text" } })}\n\n`)
+      sseResponse(`data: ${JSON.stringify({ type: "error", code: "CONTRACT_UNREADABLE", message: "We couldn't read this contract.", suggestion: "…", details: { reason: "no text" }, billing: { credits: 0 } })}\n\n`)
     );
     await mount("registry");
     const v = visible();
@@ -239,13 +280,25 @@ describe("PartnerApiConsole — registry", () => {
 });
 
 describe("PartnerApiConsole — split sheet", () => {
-  it("POSTs the body with the chosen format and offers the file to download", async () => {
+  const fileResponse = (headers: Record<string, string>) => ({
+    ok: true,
+    status: 200,
+    headers: { get: (k: string) => headers[k] ?? null },
+    blob: async () => new Blob(["%PDF-1.4 sheet"], { type: "application/pdf" }),
+    json: async () => ({}),
+  });
+
+  it("POSTs the body built from rows with the chosen format, reads the credits header and offers the file", async () => {
     vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn(() => "blob:sheet"), revokeObjectURL: vi.fn() });
-    const blob = new Blob(["%PDF-1.4 sheet"], { type: "application/pdf" });
-    fetchMock().mockResolvedValueOnce({ ok: true, status: 200, blob: async () => blob, json: async () => ({}) });
+    fetchMock().mockResolvedValueOnce(fileResponse({ "Msanii-Credits": "20", "Msanii-Request-Id": "r3" }));
     await mount("splitsheet");
     const v = visible();
     fireEvent.change(v.getByLabelText("format"), { target: { value: "docx" } });
+    fireEvent.click(v.getByRole("button", { name: "Add contributor" }));
+    fireEvent.change(v.getByLabelText("Contributor 3 Name"), { target: { value: "Ada Lee" } });
+    fireEvent.change(v.getByLabelText("Contributor 3 Role"), { target: { value: "Mixer" } });
+    fireEvent.change(v.getByLabelText("Contributor 3 Master %"), { target: { value: "10" } });
+    const preview = JSON.parse(v.getByLabelText("Request body").textContent!);
     run(v);
 
     await waitFor(() => expect(status(v)).toBeInTheDocument());
@@ -253,29 +306,42 @@ describe("PartnerApiConsole — split sheet", () => {
     expect(url).toBe(`${BASE}/splitsheet/v1/documents`);
     expect(init.headers["Content-Type"]).toBe("application/json");
     const sent = JSON.parse(init.body);
+    expect(sent).toEqual(preview);
     expect(sent.format).toBe("docx");
     expect(sent.work_title).toBe("Blue Sky");
-    expect(sent.contributors).toHaveLength(2);
+    expect(sent.contributors).toHaveLength(3);
+    expect(sent.contributors[2]).toEqual({ name: "Ada Lee", role: "Mixer", master_percentage: 10 });
     const link = v.getByRole("link", { name: /Split_Sheet_Blue_Sky\.docx/ });
     expect(link).toHaveAttribute("href", "blob:sheet");
     expect(link).toHaveAttribute("download", "Split_Sheet_Blue_Sky.docx");
-    expect(status(v).textContent).toContain("billed (base 20)");
+    expect(status(v).textContent).toContain("20 credits");
   });
 
-  it("does not send a body that is not JSON", async () => {
+  it("labels a replay from the headers", async () => {
+    vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn(() => "blob:sheet"), revokeObjectURL: vi.fn() });
+    fetchMock().mockResolvedValueOnce(fileResponse({ "Msanii-Credits": "0", "Msanii-Replayed": "true", "Msanii-Request-Id": "r3" }));
     await mount("splitsheet");
     const v = visible();
-    fireEvent.change(v.getByLabelText("Request body"), { target: { value: "{" } });
     run(v);
     await waitFor(() => expect(status(v)).toBeInTheDocument());
-    expect(status(v).textContent).toContain("not valid JSON");
+    expect(status(v).textContent).toContain("replay · 0 credits");
+  });
+
+  it("blocks the send on an invalid contributor", async () => {
+    await mount("splitsheet");
+    const v = visible();
+    fireEvent.change(v.getByLabelText("Contributor 1 Name"), { target: { value: "" } });
+    expect(v.getByRole("alert")).toHaveTextContent("Name is required");
+    run(v);
+    await waitFor(() => expect(status(v)).toBeInTheDocument());
+    expect(status(v).textContent).toContain("Fix the highlighted fields");
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });
 
 describe("PartnerApiConsole — zoe", () => {
-  it("posts an OpenAI-shaped completion for model zoe and shows the body", async () => {
-    const body = { id: "chatcmpl-1", object: "chat.completion", model: "zoe", choices: [{ index: 0, message: { role: "assistant", content: "A mechanical royalty is…" }, finish_reason: "stop" }] };
+  it("posts an OpenAI-shaped completion for model zoe and shows the body with its credits", async () => {
+    const body = { id: "chatcmpl-1", object: "chat.completion", model: "zoe", choices: [{ index: 0, message: { role: "assistant", content: "A mechanical royalty is…" }, finish_reason: "stop" }], billing: { credits: 5, request_id: "r4" } };
     fetchMock().mockResolvedValueOnce(jsonResponse(200, body));
     await mount("zoe");
     const v = visible();
@@ -288,7 +354,8 @@ describe("PartnerApiConsole — zoe", () => {
     expect(init.headers["Content-Type"]).toBe("application/json");
     expect(JSON.parse(init.body)).toEqual({ model: "zoe", messages: [{ role: "user", content: "What is a mechanical royalty?" }] });
     expect(status(v).textContent).toContain("A mechanical royalty is…");
-    expect(status(v).textContent).toContain("billed (base 5)");
+    expect(status(v).textContent).toContain("5 credits");
+    expect(status(v).textContent).not.toContain("tokens");
   });
 
   it("shows a 502 as unbilled", async () => {

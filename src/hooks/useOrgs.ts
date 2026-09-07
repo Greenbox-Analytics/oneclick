@@ -117,6 +117,21 @@ export interface OrgAdminContact {
   fullName: string | null;
 }
 
+/** Usage windows (spec 2026-09-06 §6): mtd = the pool's billing period. */
+export type UsageRange = "7d" | "14d" | "mtd" | "1y" | "all";
+
+export interface ActionSpend {
+  action: string;
+  credits: number;
+  runs: number;
+}
+
+export interface SeriesDay {
+  /** UTC date, YYYY-MM-DD. Only days with spend are listed. */
+  day: string;
+  actions: ActionSpend[];
+}
+
 /** One row of GET /orgs/{id}/usage's `seats` array (admin-only).
  * Members hold no balance — they spend from the pool against a monthly cap, so
  * what matters per member is their ceiling and what they've used of it. */
@@ -132,16 +147,49 @@ export interface OrgSeatUsage {
   effectiveCap: number | null;
   /** Counter maintained by debit_credits, reset each period. */
   capUsed: number;
-  /** Ledger-derived spend for the pool's current period. */
+  /** Ledger-derived spend for the pool's current period. PRODUCT ONLY — the
+   * members table compares it to the cap, and API spend isn't capped per seat. */
   spentThisPeriod: number;
+  /** Spend through keys this member CREATED. Optional for deploy skew. */
+  apiCredits?: number;
+  apiRuns?: number;
+  /** Product AND partner actions — the tool columns fold both. */
+  byAction: ActionSpend[];
+  /** Per-day spend for this row over the same window as the top-level series.
+   * Optional for deploy skew — a backend without it means "no breakdown", not zero spend. */
+  series?: SeriesDay[];
 }
 
-/** One partner API key's spend this pool period (get_org_usage.byKey). */
+/** One partner API key's spend this pool period (get_org_usage.byKey). One row
+ * per LISTED key — zero-spend keys included, keys past the 30-day retention
+ * absent — so labels, status and folder come from here, not a client-side join. */
 export interface PartnerKeyUsageRow {
   keyId: string;
+  label: string;
+  keyPrefix: string;
+  status: "active" | "revoked" | "expired";
+  folderId: string | null;
+  folderName: string | null;
   credits: number;
   runs: number;
   lastUsedAt: string | null;
+  byAction: ActionSpend[];
+  /** Per-day spend for this row over the same window as the top-level series.
+   * Optional for deploy skew — a backend without it means "no breakdown", not zero spend. */
+  series?: SeriesDay[];
+}
+
+/** Spend rolled up by the key's CURRENT folder; the unfiled row is folderId null. */
+export interface FolderUsageRow {
+  folderId: string | null;
+  name: string;
+  keys: number;
+  credits: number;
+  runs: number;
+  byAction: ActionSpend[];
+  /** Per-day spend for this row over the same window as the top-level series.
+   * Optional for deploy skew — a backend without it means "no breakdown", not zero spend. */
+  series?: SeriesDay[];
 }
 
 /** GET /orgs/{id}/usage — admin-only per-member rollup. */
@@ -155,6 +203,14 @@ export interface OrgUsage {
   seats: OrgSeatUsage[];
   /** Partner API spend per key, credits desc; [] for an org with no partner traffic. */
   byKey: PartnerKeyUsageRow[];
+  /** The same spend grouped by folder, credits desc. */
+  byFolder: FolderUsageRow[];
+  range: UsageRange;
+  /** Floor of the window, ISO; null for all time. */
+  since: string | null;
+  /** Totals of the same-length window before `since`; null when there is none. */
+  previous: { credits: number; runs: number } | null;
+  series: SeriesDay[];
 }
 
 export interface OrgInvite {
@@ -429,11 +485,13 @@ export function useDissolveOrg() {
 }
 
 /** GET /orgs/{id}/usage — admin-only. */
-export function useOrgUsage(orgId?: string) {
+export function useOrgUsage(orgId?: string, range: UsageRange = "mtd") {
   const { user } = useAuth();
   return useQuery<OrgUsage>({
-    queryKey: ["orgs", orgId, "usage"],
-    queryFn: () => apiFetch<OrgUsage>(`${API_URL}/orgs/${orgId}/usage`),
+    // The range is part of the key: the members table keeps its MTD numbers
+    // while the Usage card looks at a year.
+    queryKey: ["orgs", orgId, "usage", range],
+    queryFn: () => apiFetch<OrgUsage>(`${API_URL}/orgs/${orgId}/usage?range=${range}`),
     enabled: !!user?.id && !!orgId,
     staleTime: 15_000,
   });

@@ -68,6 +68,7 @@ describe("Documentation — sidebar", () => {
     expect(nav.getByText("/zoe/v1/chat/completions")).toBeInTheDocument();
     expect(nav.queryByText("/me")).not.toBeInTheDocument();
     expect(nav.queryByText("/test")).not.toBeInTheDocument();
+    expect(nav.queryByText("Authentication")).not.toBeInTheDocument();
 
     fireEvent.click(api);
     expect(api).toHaveAttribute("aria-expanded", "false");
@@ -89,7 +90,11 @@ describe("Documentation — API section", () => {
   it("is deep-linkable at /docs?section=api, opens on Overview, and shows the key check", () => {
     mountDocs("section=api");
     expect(tabs().getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
-    expect(tabs().getAllByRole("tab")).toHaveLength(8);
+    expect(tabs().getAllByRole("tab")).toHaveLength(7);
+    // Connect lives on Overview now: base URL, bearer header, the free check.
+    expect(screen.getByRole("heading", { name: "Connect" })).toBeInTheDocument();
+    expect(screen.getByText(BASE)).toBeInTheDocument();
+    expect(screen.getByText(/Authorization: Bearer/)).toBeInTheDocument();
     // Overview: every tool with its price, tool-first paths only.
     expect(screen.getAllByText("/oneclick/v1/royalties").length).toBeGreaterThan(0);
     expect(screen.getAllByText("/registry/v1/splits").length).toBeGreaterThan(0);
@@ -106,6 +111,17 @@ describe("Documentation — API section", () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
+  it("sends the retired ?tab=auth to Overview, and the models row to its Connect block", () => {
+    mountDocs("section=api&tab=auth");
+    expect(tabs().getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+    expect(tabs().queryByRole("tab", { name: "Authentication" })).not.toBeInTheDocument();
+    fireEvent.click(tabs().getByRole("tab", { name: "Zoe" }));
+    fireEvent.click(sidebar().getByText("/zoe/v1/models"));
+    expect(tabs().getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("heading", { name: "Connect" })).toBeInTheDocument();
+    expect(document.getElementById("connect")).not.toBeNull();
+  });
+
   it("deep-links a tab with ?tab= and swaps the console to match", () => {
     mountDocs("section=api&tab=royalties");
     expect(tabs().getByRole("tab", { name: "Royalty calculation" })).toHaveAttribute("aria-selected", "true");
@@ -117,8 +133,14 @@ describe("Documentation — API section", () => {
     expect(screen.getAllByText(/import json, requests/).length).toBeGreaterThan(0);
     const c = shownConsole();
     expect(c.getByLabelText("Sample input")).toBeInTheDocument();
-    expect(c.getByLabelText("contract_terms")).toBeInTheDocument();
-    expect(c.getByRole("button", { name: /run request · 30 credits/i })).toBeInTheDocument();
+    expect(c.getByLabelText("Party 1 Name")).toBeInTheDocument();
+    expect(c.getByRole("button", { name: /run request/i })).toBeInTheDocument();
+    // The result walkthrough, one section per top-level key.
+    expect(screen.getByText("summary")).toBeInTheDocument();
+    expect(screen.getByText("total_payable")).toBeInTheDocument();
+    expect(screen.getAllByText("billing").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/"type": "result"/).length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toMatch(/total_payments|amount_to_pay/);
   });
 
   it("moves between tabs from the strip, each with its own console", () => {
@@ -126,24 +148,26 @@ describe("Documentation — API section", () => {
     fireEvent.click(tabs().getByRole("tab", { name: "Splits" }));
     expect(screen.getByRole("heading", { name: "Unreadable contracts" })).toBeInTheDocument();
     expect(screen.getByText("CONTRACT_UNREADABLE")).toBeInTheDocument();
+    expect(screen.getByText("main_artist")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("main_artist_found");
     expect(shownConsole().getByLabelText("contracts")).toHaveAttribute("type", "file");
-    expect(shownConsole().getByRole("button", { name: /run request · 30 credits/i })).toBeInTheDocument();
+    expect(shownConsole().getByRole("button", { name: /run request/i })).toBeInTheDocument();
 
     fireEvent.click(tabs().getByRole("tab", { name: "Split sheet" }));
     expect(screen.getByRole("heading", { name: "Contributors" })).toBeInTheDocument();
     expect(screen.getAllByText("master_percentage").length).toBeGreaterThan(0);
     expect(shownConsole().getByLabelText("Request body")).toBeInTheDocument();
     expect(shownConsole().getByLabelText("format")).toBeInTheDocument();
-    expect(shownConsole().getByRole("button", { name: /run request · 20 credits/i })).toBeInTheDocument();
+    expect(screen.getByText("Msanii-Credits")).toBeInTheDocument();
+    expect(shownConsole().getByRole("button", { name: /run request/i })).toBeInTheDocument();
 
     fireEvent.click(tabs().getByRole("tab", { name: "Errors" }));
     expect(screen.getByText("NO_SONG_MATCHES")).toBeInTheDocument();
     fireEvent.click(tabs().getByRole("tab", { name: "Zoe" }));
     expect(screen.getByRole("heading", { name: "OpenAI compatibility" })).toBeInTheDocument();
     expect(shownConsole().getByLabelText("Message")).toBeInTheDocument();
-    fireEvent.click(tabs().getByRole("tab", { name: "Authentication" }));
-    expect(screen.getByText(BASE)).toBeInTheDocument();
-    expect(screen.getAllByText(/\/zoe\/v1\/models/).length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toContain("prompt_tokens");
+    expect(screen.getAllByText("billing").length).toBeGreaterThan(0);
     fireEvent.click(tabs().getByRole("tab", { name: "Billing & limits" }));
     expect(screen.getByText(/before the results arrived, costs nothing/i)).toBeInTheDocument();
   });

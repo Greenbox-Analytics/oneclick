@@ -16,8 +16,12 @@ import {
   useAdminOrgs,
   useAdminOrgPool,
   useAdminOrgMutations,
+  useAdminOrgUsage,
+  useAdminPartnerKeys,
   type AdminOrgRow,
 } from "@/hooks/useAdminOrgs";
+import { OrgUsageAnalysis } from "@/components/orgs/OrgUsageAnalysis";
+import { keyStatus } from "@/lib/partnerKeys";
 import { KeyValue, ORG_STATUS_TONE, SectionLabel, shortDate, Tag } from "@/components/admin/ui";
 
 export function AdminOrgsPanel({
@@ -240,6 +244,7 @@ function OrgDetailSheet({ org, onClose }: { org: AdminOrgRow | null; onClose: ()
           <TabsList className="w-full justify-start">
             <TabsTrigger value="license">License</TabsTrigger>
             <TabsTrigger value="credits">Credits</TabsTrigger>
+            <TabsTrigger value="usage">Usage</TabsTrigger>
           </TabsList>
 
           <TabsContent value="license" className="space-y-6 pt-4">
@@ -429,8 +434,66 @@ function OrgDetailSheet({ org, onClose }: { org: AdminOrgRow | null; onClose: ()
               </section>
             )}
           </TabsContent>
+
+          <TabsContent value="usage" className="space-y-6 pt-4">
+            {/* The org's own Usage card, read-only, against the /admin routes. */}
+            <OrgUsageAnalysis
+              orgId={org.id}
+              partnerApiEnabled={org.partnerApiEnabled}
+              useUsage={useAdminOrgUsage}
+              useKeys={useAdminPartnerKeys}
+              reportPath={`/admin/orgs/${org.id}/usage/report.pdf`}
+            />
+            {org.partnerApiEnabled && <AdminOrgKeys orgId={org.id} />}
+          </TabsContent>
         </Tabs>
       </SheetContent>
     </Sheet>
+  );
+}
+
+/** Read-only: minting and revoking stay in the org's own console. */
+function AdminOrgKeys({ orgId }: { orgId: string }) {
+  const { data, isLoading, isError } = useAdminPartnerKeys(orgId);
+  const folderName = new Map((data?.folders ?? []).map((f) => [f.id, f.name]));
+  const keys = data?.keys ?? [];
+
+  return (
+    <section>
+      <SectionLabel>API keys</SectionLabel>
+      {isLoading && <p className="text-xs text-muted-foreground">Loading keys…</p>}
+      {isError && <p className="text-xs text-destructive">Couldn&apos;t load API keys.</p>}
+      {!isLoading && !isError && keys.length === 0 && (
+        <p className="text-xs text-muted-foreground">No API keys yet.</p>
+      )}
+      {keys.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="border-b border-border text-left text-[10.5px] uppercase tracking-wider text-muted-foreground">
+                <th className="py-2 pr-3 font-semibold">Name</th>
+                <th className="py-2 pr-3 font-semibold">Folder</th>
+                <th className="py-2 pr-3 font-semibold">Status</th>
+                <th className="py-2 pr-3 font-semibold">Created by</th>
+                <th className="py-2 font-semibold">Last used</th>
+              </tr>
+            </thead>
+            <tbody>
+              {keys.map((k) => (
+                <tr key={k.id} className="border-b border-border/60 last:border-b-0">
+                  <td className="py-2 pr-3 font-medium">{k.label}</td>
+                  <td className="py-2 pr-3 text-muted-foreground">
+                    {(k.folder_id && folderName.get(k.folder_id)) || "—"}
+                  </td>
+                  <td className="py-2 pr-3 capitalize text-muted-foreground">{keyStatus(k)}</td>
+                  <td className="py-2 pr-3 text-muted-foreground">{k.created_by_label ?? "—"}</td>
+                  <td className="py-2 text-muted-foreground">{shortDate(k.last_used_at) || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }

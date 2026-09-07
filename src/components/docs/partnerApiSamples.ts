@@ -4,6 +4,8 @@
 // (only-export-components). Mirrors docs/partner-api-reference.md — keep the
 // two in step.
 
+import type { Row } from "./RowsEditor";
+
 export const PARTNER_API_URL = (import.meta.env.VITE_PARTNER_API_URL || "").replace(/\/$/, "");
 
 // Base prices at the time of writing (credit_prices: partner_oneclick_run,
@@ -51,16 +53,20 @@ r.raise_for_status()
 for line in r.iter_lines(decode_unicode=True):
     if line.startswith("data:"):
         event = json.loads(line[5:])
-# event == {"type": "result", "payments": [...], "total_payments": 3, "expense_review_required": false}
+# event == {"type": "result", "summary": {...}, "payments": [...], "billing": {"credits": 30, ...}}
 #       or {"type": "error", "code": "…", "message": "…", "suggestion": "…", "details": {...}}`,
   },
   royaltiesTerms: {
     title: "From terms you already hold (no PDF, no AI)",
     code: `terms = {
-    "parties": [{"name": "Jane Doe", "role": "producer"}],
-    "works": [{"title": "Blue Sky"}],
+    "parties": [
+        {"name": "Jane Doe", "role": "producer"},
+        {"name": "Sam Ray", "role": "featured artist"},
+    ],
+    "works": [{"title": "Blue Sky"}, {"title": "Red Sun"}],
     "royalty_shares": [
-        {"party_name": "Jane Doe", "royalty_type": "master", "percentage": 50, "basis": "gross"}
+        {"party_name": "Jane Doe", "royalty_type": "master", "percentage": 50, "basis": "gross"},
+        {"party_name": "Sam Ray", "royalty_type": "master", "percentage": 10, "basis": "net"},
     ],
 }
 r = requests.post(
@@ -69,7 +75,8 @@ r = requests.post(
     files={"statement": open("statement.xlsx", "rb")},
     data={"contract_terms": json.dumps(terms)},
     stream=True,
-)`,
+)
+# Lists are plain JSON arrays: add as many parties, works and shares as the deal has.`,
   },
   contractTerms: {
     title: "Splits: the deal as data — POST /registry/v1/splits",
@@ -87,7 +94,7 @@ for line in r.iter_lines(decode_unicode=True):
     if line.startswith("data:"):
         event = json.loads(line[5:])
 terms = event["contract_terms"]   # exactly what /oneclick/v1/royalties takes as contract_terms
-splits = event["splits"]          # {"parties": [{"name", "master_pct", "publishing_pct", ...}], "main_artist_found"}`,
+splits = event["splits"]          # {"main_artist": "Jane Doe" | None, "parties": [{"name", "role", "master_pct", "publishing_pct", "soundexchange_pct"}]}`,
   },
   splitSheet: {
     title: "A finished split sheet — POST /splitsheet/v1/documents",
@@ -135,43 +142,40 @@ export const STATEMENT_SAMPLE = `Title,Net Payable
 Blue Sky,1000.00
 Red Sun,500.00`;
 
-const TERMS_GROSS = `{
-  "parties": [{"name": "Jane Doe", "role": "producer"}],
-  "works": [{"title": "Blue Sky"}],
-  "royalty_shares": [
-    {"party_name": "Jane Doe", "royalty_type": "master",
-     "percentage": 50, "basis": "gross"}
-  ]
-}`;
-
-const TERMS_NET = TERMS_GROSS.replace('"basis": "gross"', '"basis": "net"');
-
-const TERMS_NO_MATCH = TERMS_GROSS.replace('"Blue Sky"', '"Purple Rain"');
+const JANE: Row = { name: "Jane Doe", role: "producer" };
+const share = (basis: string): Row => ({ party_name: "Jane Doe", royalty_type: "master", percentage: "50", basis });
 
 export interface ConsolePreset {
   id: string;
   label: string;
   statement: string;
-  /** Empty when the preset sends PDFs: exactly one of the two goes on the wire. */
-  terms: string;
-  expenses: string;
+  /** True when the preset sends PDFs: exactly one of contracts / contract_terms goes on the wire. */
   pdf: boolean;
+  parties: Row[];
+  works: Row[];
+  shares: Row[];
+  expenses: Row[];
 }
 
 export const CONSOLE_PRESETS: ConsolePreset[] = [
-  { id: "min", label: "Smallest valid statement + terms", statement: STATEMENT_SAMPLE, terms: TERMS_GROSS, expenses: "[]", pdf: false },
-  { id: "pdf", label: "Statement + contract PDF", statement: STATEMENT_SAMPLE, terms: "", expenses: "[]", pdf: true },
-  {
-    id: "exp",
-    label: "Net basis with expenses",
-    statement: STATEMENT_SAMPLE,
-    terms: TERMS_NET,
-    expenses: `[{"description": "Studio time", "amount": 200,
-  "work_titles": ["Blue Sky"]}]`,
-    pdf: false,
-  },
-  { id: "none", label: "No song matches (error)", statement: STATEMENT_SAMPLE, terms: TERMS_NO_MATCH, expenses: "[]", pdf: false },
+  { id: "min", label: "Smallest valid statement + terms", statement: STATEMENT_SAMPLE, pdf: false, parties: [JANE], works: [{ title: "Blue Sky" }], shares: [share("gross")], expenses: [] },
+  { id: "pdf", label: "Statement + contract PDF", statement: STATEMENT_SAMPLE, pdf: true, parties: [], works: [], shares: [], expenses: [] },
+  { id: "exp", label: "Net basis with expenses", statement: STATEMENT_SAMPLE, pdf: false, parties: [JANE], works: [{ title: "Blue Sky" }], shares: [share("net")], expenses: [{ description: "Studio time", amount: "200", work_titles: "Blue Sky" }] },
+  { id: "none", label: "No song matches (error)", statement: STATEMENT_SAMPLE, pdf: false, parties: [JANE], works: [{ title: "Purple Rain" }], shares: [share("gross")], expenses: [] },
 ];
+
+// The split sheet console's starting rows (SPLIT_SHEET_SAMPLE stays the docs
+// page's JSON example of the same document).
+export const SPLIT_SHEET_PRESET = {
+  work_title: "Blue Sky",
+  work_type: "single",
+  split_type: "both",
+  date: "6 September 2026",
+  contributors: [
+    { name: "Jane Doe", role: "Producer", publishing_share: "50", master_percentage: "50" },
+    { name: "Sam Ray", role: "Writer", publishing_share: "50", master_percentage: "50" },
+  ] as Row[],
+};
 
 // The split sheet console's editable body (format is picked separately).
 export const SPLIT_SHEET_SAMPLE = `{
@@ -190,3 +194,156 @@ export const SPLIT_SHEET_SAMPLE = `{
 // Zoe on the API is stateless — no stored contracts — so the sample question
 // is one she can answer from general knowledge.
 export const ZOE_SAMPLE_MESSAGE = "What is a mechanical royalty, and who collects it?";
+
+// ---- response walkthroughs -----------------------------------------------------
+// One entry per top-level key of a response, rendered by ResponseExample as a
+// captioned block with the JSON fragment and, where it helps, a field table.
+
+export interface ResponseSection {
+  key: string;
+  note: string;
+  json: string;
+  fields?: [string, string, string][];
+}
+
+const BILLING_FIELDS: [string, string, string][] = [
+  ["credits", "integer", "Credits charged for this call. 0 on a replay under the same Idempotency-Key."],
+  ["replayed", "true", "Present only on a replay: this result was charged on its first run, not again."],
+  ["request_id", "string", "The id the charge is recorded under — quote it to support."],
+];
+
+export const ROYALTIES_RESPONSE: ResponseSection[] = [
+  {
+    key: "summary",
+    note: "The totals, first.",
+    json: `"type": "result",
+"summary": {"payments": 2, "total_payable": 600.0, "expense_review_required": true}`,
+    fields: [
+      ["payments", "integer", "How many payment lines follow."],
+      ["total_payable", "number", "Sum of every line's payable amount, 2 dp."],
+      ["expense_review_required", "boolean", "True when any line is on a net basis: the expense list changed the amounts and deserves a human check."],
+    ],
+  },
+  {
+    key: "payments",
+    note: "One line per party per matched song.",
+    json: `"payments": [
+  {
+    "song": "Blue Sky",
+    "payee": {"name": "Jane Doe", "role": "producer"},
+    "share": {"type": "master", "percentage": 50.0, "basis": "net"},
+    "amounts": {"gross": 1000.0, "expenses": 200.0, "net": 800.0, "payable": 400.0}
+  },
+  {
+    "song": "Red Sun",
+    "payee": {"name": "Jane Doe", "role": "producer"},
+    "share": {"type": "master", "percentage": 50.0, "basis": "net"},
+    "amounts": {"gross": 500.0, "expenses": 100.0, "net": 400.0, "payable": 200.0}
+  }
+]`,
+    fields: [
+      ["song", "string", "The work's title as given in the contract."],
+      ["payee.name, payee.role", "string", "Who is paid, and the role the contract gives them (or unknown)."],
+      ["share.type", "string", "The income the share is paid from, as written in the contract (master, streaming…)."],
+      ["share.percentage", "number", "The share applied, 0–100."],
+      ["share.basis", "\"gross\" | \"net\"", "The basis actually applied."],
+      ["amounts.gross", "number", "What the statement paid for this song, all matching rows summed."],
+      ["amounts.expenses", "number", "Expenses deducted for this song; 0 on a gross share."],
+      ["amounts.net", "number", "gross − expenses, floored at 0."],
+      ["amounts.payable", "number", "net × percentage ÷ 100 — the figure to pay. Amounts are rounded to 2 dp."],
+    ],
+  },
+  { key: "billing", note: "What this call cost.", json: `"billing": {"credits": ${ROYALTIES_PRICE}, "request_id": "a1b2c3…"}`, fields: BILLING_FIELDS },
+];
+
+export const ERROR_EVENT_RESPONSE: ResponseSection[] = [
+  {
+    key: "error event",
+    note: "Instead of a result. HTTP is already 200, so check type.",
+    json: `{
+  "type": "error",
+  "code": "NO_SONG_MATCHES",
+  "message": "The contract covers songs that don't appear in this royalty statement.",
+  "suggestion": "Make sure the statement is for the same release as the contract…",
+  "details": {"contract_works": ["Blue Sky"], "statement_songs": ["Blue Skies (Live)"]},
+  "billing": {"credits": 0}
+}`,
+    fields: [
+      ["code", "string", "Stable, for your code to branch on (the list is below)."],
+      ["message, suggestion", "string", "Safe to show a person."],
+      ["details", "object", "Structured context to fix the input without a person in the loop."],
+      ["billing.credits", "0", "An error event is never billed, and says so."],
+    ],
+  },
+];
+
+export const SPLITS_RESPONSE: ResponseSection[] = [
+  {
+    key: "contract_terms",
+    note: "The deal, in exactly the shape the royalty calculation accepts.",
+    json: `"type": "result",
+"contract_terms": {
+  "parties": [{"name": "Jane Doe", "role": "producer", "aliases": []}],
+  "works": [{"title": "Blue Sky", "work_type": "song"}],
+  "royalty_shares": [
+    {"party_name": "Jane Doe", "royalty_type": "master", "percentage": 50.0, "terms": "…", "basis": "net"}
+  ],
+  "contract_summary": "…",
+  "default_basis": null
+}`,
+  },
+  {
+    key: "splits",
+    note: "The Registry's ownership view, one line per party.",
+    json: `"splits": {
+  "main_artist": "Jane Doe",
+  "parties": [
+    {"name": "Jane Doe", "role": "producer", "master_pct": 50.0, "publishing_pct": 0.0, "soundexchange_pct": 0.0}
+  ]
+}`,
+    fields: [
+      ["main_artist", "string | null", "The party matching main_artist_name, by the name the contract uses; null when the name wasn't found or none was sent."],
+      ["parties[].name, role", "string", "The party as named in the contract. Parties with no master, publishing or SoundExchange share are left out; the main artist is always kept."],
+      ["parties[].master_pct", "number", "Share of the sound recording's income, 0–100."],
+      ["parties[].publishing_pct", "number", "Share of the composition's income, 0–100."],
+      ["parties[].soundexchange_pct", "number", "Share of neighbouring-rights income the contract assigns, where it does."],
+    ],
+  },
+  { key: "billing", note: "What this call cost.", json: `"billing": {"credits": ${REGISTRY_PRICE}, "request_id": "a1b2c3…"}`, fields: BILLING_FIELDS },
+];
+
+export const ZOE_RESPONSE: ResponseSection[] = [
+  {
+    key: "choices",
+    note: "OpenAI's shape: the answer is choices[0].message.content.",
+    json: `"id": "chatcmpl-…",
+"object": "chat.completion",
+"created": 1757030400,
+"model": "zoe",
+"choices": [
+  {
+    "index": 0,
+    "message": {"role": "assistant", "content": "A mechanical royalty is paid to the songwriter and publisher each time a composition is reproduced…"},
+    "finish_reason": "stop"
+  }
+]`,
+  },
+  {
+    key: "billing",
+    note: "What this answer cost. On a stream it rides on the final finish_reason: \"stop\" frame, before data: [DONE].",
+    json: `"billing": {"credits": ${ZOE_PRICE}, "request_id": "…"}`,
+    fields: [
+      ["credits", "integer", "Credits charged for this answer. No token counts are returned."],
+      ["request_id", "string", "Quote it to support."],
+    ],
+  },
+];
+
+export const SPLIT_SHEET_HEADERS: [string, string, string][] = [
+  ["Content-Type", "application/pdf", "or application/vnd.openxmlformats-officedocument.wordprocessingml.document for docx."],
+  ["Content-Disposition", "attachment; filename=\"Split_Sheet_<title>.<format>\"", "Characters outside letters, digits, . _ - are replaced by _."],
+  ["Content-Length", "bytes", ""],
+  ["Msanii-Credits", `${SPLIT_SHEET_PRICE}`, "Credits charged for this document; 0 on a replay."],
+  ["Msanii-Request-Id", "id", "The id the charge is recorded under — quote it to support."],
+  ["Msanii-Replayed", "true", "Present only on a replay under the same Idempotency-Key."],
+];

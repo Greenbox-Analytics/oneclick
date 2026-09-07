@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, EmailStr, Field
 
 logger = logging.getLogger(__name__)
@@ -554,20 +554,67 @@ async def create_partner_key(
 
     sb = get_supabase_client()
     _require_org(sb, org_id)
-    return psvc.mint_key(
-        sb,
-        org_id,
-        label=body.label,
-        created_by=admin_id,
-        expires_at=body.expires_at.isoformat() if body.expires_at else None,
-    )
+    try:
+        return psvc.mint_key(
+            sb,
+            org_id,
+            label=body.label,
+            created_by=admin_id,
+            expires_at=body.expires_at.isoformat() if body.expires_at else None,
+            folder_id=body.folder_id,
+        )
+    except ValueError:
+        raise HTTPException(status_code=422, detail={"code": "unknown_folder"})
 
 
 @router.get("/orgs/{org_id}/partner-keys")
 async def list_partner_keys(org_id: str, _admin: str = Depends(require_admin)) -> dict:
+    """The same {"keys", "folders"} payload the org's own console reads."""
     from main import get_supabase_client
 
-    return {"keys": psvc.list_keys(get_supabase_client(), org_id)}
+    return psvc.key_console(get_supabase_client(), org_id)
+
+
+@router.get("/orgs/{org_id}/usage")
+async def get_admin_org_usage(
+    org_id: str,
+    range: str = Query("mtd", description="mtd | 7d | 14d | 1y | all"),
+    _admin: str = Depends(require_admin),
+) -> dict:
+    """Any org's usage payload, identical in shape to GET /orgs/{id}/usage.
+    Calls the rollup directly: require_admin already authenticated a MSANII
+    admin, who holds no seat in the org and so cannot pass its admin check."""
+    from main import get_supabase_client
+    from orgs import service as orgs_service
+
+    if range not in orgs_service.USAGE_RANGES:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_range", "message": f"range must be one of {', '.join(orgs_service.USAGE_RANGES)}"},
+        )
+    return await orgs_service.org_usage_rollup(get_supabase_client(), org_id, range_=range)
+
+
+@router.get("/orgs/{org_id}/usage/report.pdf")
+async def get_admin_org_usage_report(
+    org_id: str,
+    range: str = Query("mtd", description="mtd | 7d | 14d | 1y | all"),
+    _admin: str = Depends(require_admin),
+):
+    """The same payload as GET /admin/orgs/{id}/usage, as a downloadable PDF."""
+    from main import get_supabase_client
+    from orgs import service as orgs_service
+    from orgs import usage_report
+
+    if range not in orgs_service.USAGE_RANGES:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_range", "message": f"range must be one of {', '.join(orgs_service.USAGE_RANGES)}"},
+        )
+    db = get_supabase_client()
+    data = await orgs_service.org_usage_rollup(db, org_id, range_=range)
+    name = (db.table("organizations").select("name").eq("id", org_id).execute().data or [{}])[0].get("name") or "Team"
+    return usage_report.pdf_response(usage_report.render_org_report(name, data), name, range)
 
 
 @router.delete("/orgs/{org_id}/partner-keys/{key_id}")

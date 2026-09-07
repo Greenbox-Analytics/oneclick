@@ -4,6 +4,8 @@
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import type { AdminLedgerEntry } from "@/hooks/useAdmin";
+import type { OrgUsage, UsageRange } from "@/hooks/useOrgs";
+import type { PartnerKeysPayload } from "@/hooks/usePartnerKeys";
 
 export interface AdminOrgRow {
   id: string;
@@ -101,4 +103,25 @@ export function useAdminOrgMutations() {
   });
 
   return { grantCredits, setDispersal, setStatus, setPartnerApi };
+}
+
+// Read-only mirrors of the org-side usage/keys endpoints, for the Organizations
+// drawer. Same payloads, admin routes — so OrgUsageAnalysis can be handed these
+// in place of its own hooks.
+export function useAdminOrgUsage(orgId?: string, range: UsageRange = "mtd"): UseQueryResult<OrgUsage> {
+  return useQuery({
+    queryKey: ["admin", "orgs", orgId, "usage", range],
+    queryFn: () => apiFetch<OrgUsage>(`${API_URL}/admin/orgs/${orgId}/usage?range=${range}`),
+    enabled: !!orgId,
+    staleTime: 15_000,
+  });
+}
+
+export function useAdminPartnerKeys(orgId?: string): UseQueryResult<PartnerKeysPayload> {
+  return useQuery({
+    queryKey: ["admin", "orgs", orgId, "partner-keys"],
+    queryFn: () => apiFetch<PartnerKeysPayload>(`${API_URL}/admin/orgs/${orgId}/partner-keys`),
+    enabled: !!orgId,
+    staleTime: 15_000,
+  });
 }

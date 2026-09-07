@@ -42,6 +42,30 @@ class PartnerKeyCreate(ExpiringKeyCreate):
     One model, two callers, so they can't drift."""
 
     label: str = Field(min_length=1, max_length=120)
+    # Optional grouping. Validated against the org at mint time, not here: a
+    # well-formed id for another org's folder is still unknown.
+    folder_id: str | None = None
+
+
+class KeyFolderCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+    @field_validator("name")
+    @classmethod
+    def _stripped(cls, v: str) -> str:
+        # min_length sees the raw string, so "   " passes it. Strip and
+        # re-check: the service stores the stripped name, and a whitespace-only
+        # one must 422 at the edge rather than raise deeper in.
+        v = v.strip()
+        if not 1 <= len(v) <= 80:
+            raise ValueError("name must be 1-80 characters")
+        return v
+
+
+class KeyFolderAssign(BaseModel):
+    """None = unfile the key."""
+
+    folder_id: str | None = None
 
 
 # ---- request DTOs -----------------------------------------------------------
@@ -116,24 +140,56 @@ class PartnerSplitSheetRequest(BaseModel):
 # ---- response DTOs ----------------------------------------------------------
 
 
-class PartnerPayment(BaseModel):
-    song_title: str
-    party_name: str
+class PartnerPayee(BaseModel):
+    name: str
     role: str
-    royalty_type: str
+
+
+class PartnerShare(BaseModel):
+    type: str
     percentage: float
-    amount_to_pay: float
     basis: str
-    gross_amount: float
-    expenses_applied: float
-    net_amount: float
-    terms: str | None = None
+
+
+class PartnerAmounts(BaseModel):
+    gross: float
+    expenses: float
+    net: float
+    payable: float
+
+
+class PartnerPayment(BaseModel):
+    """One line of a calculation — the song, who is paid, on what share, and
+    the money — sectioned so a partner reads it without a field legend."""
+
+    song: str
+    payee: PartnerPayee
+    share: PartnerShare
+    amounts: PartnerAmounts
+
+
+class PartnerCalcSummary(BaseModel):
+    payments: int
+    total_payable: float
+    expense_review_required: bool
 
 
 class PartnerCalcResult(BaseModel):
+    summary: PartnerCalcSummary
     payments: list[PartnerPayment]
-    total_payments: int
-    expense_review_required: bool
+
+
+class PartnerSplitParty(BaseModel):
+    name: str
+    role: str
+    master_pct: float
+    publishing_pct: float
+    soundexchange_pct: float
+
+
+class PartnerSplits(BaseModel):
+    main_artist: str | None
+    parties: list[PartnerSplitParty]
 
 
 # ---- mapping ----------------------------------------------------------------
@@ -161,10 +217,59 @@ def to_contract_data(terms: PartnerContractTerms) -> ContractData:
 
 
 def payment_to_dto(p: dict) -> PartnerPayment:
-    """RoyaltyPayment (as dict, via dataclasses.asdict) -> frozen v1 DTO.
-    Field names match 1:1 (the drift test pins them); pydantic ignores the
-    two internal extras (total_royalty, source_contract_ids)."""
-    return PartnerPayment.model_validate(p)
+    """RoyaltyPayment (as dict, via dataclasses.asdict) -> the sectioned v1
+    payment. The internal free-text `terms`, `total_royalty` and
+    `source_contract_ids` are dropped: the clause is returned by
+    /registry/v1/splits under contract_terms.royalty_shares[].terms."""
+    return PartnerPayment(
+        song=p["song_title"],
+        payee=PartnerPayee(name=p["party_name"], role=p["role"]),
+        share=PartnerShare(type=p["royalty_type"], percentage=p["percentage"], basis=p["basis"]),
+        amounts=PartnerAmounts(
+            gross=round(p["gross_amount"], 2),
+            expenses=round(p["expenses_applied"], 2),
+            net=round(p["net_amount"], 2),
+            payable=round(p["amount_to_pay"], 2),
+        ),
+    )
+
+
+def calc_result(payments: list[dict]) -> dict:
+    """The royalties result event body, minus `type` and `billing` (the router
+    adds those): a summary block, then the sectioned payments."""
+    dtos = [payment_to_dto(p) for p in payments]
+    summary = PartnerCalcSummary(
+        payments=len(dtos),
+        # Sum the already-rounded payables so a partner adding up the lines
+        # they were shown gets exactly total_payable.
+        total_payable=round(sum(d.amounts.payable for d in dtos), 2),
+        expense_review_required=any(d.share.basis == "net" for d in dtos),
+    )
+    return PartnerCalcResult(summary=summary, payments=dtos).model_dump()
+
+
+def to_partner_splits(pivot: dict) -> dict:
+    """Registry pivot (contract_splits.parse_royalty_splits) -> the API's
+    `splits` section. `main_artist` is the party the pivot flagged, by the name
+    the contract uses, or None when the name sent was not found (or none was
+    sent). `aliases` and the per-party flag are dropped. Percentages are
+    indexed directly (not `.get(..., 0.0)`): a pivot missing one is a bug in
+    the parse, and this is a money path — it must raise, not silently publish
+    a 0.0 split."""
+    parties = pivot.get("parties") or []
+    return PartnerSplits(
+        main_artist=next((p["name"] for p in parties if p.get("is_main_artist")), None),
+        parties=[
+            PartnerSplitParty(
+                name=p["name"],
+                role=p.get("role") or "",
+                master_pct=p["master_pct"],
+                publishing_pct=p["publishing_pct"],
+                soundexchange_pct=p["soundexchange_pct"],
+            )
+            for p in parties
+        ],
+    ).model_dump()
 
 
 def from_contract_data(cd: ContractData) -> PartnerContractTerms:

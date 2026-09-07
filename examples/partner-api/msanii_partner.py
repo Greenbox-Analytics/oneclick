@@ -8,8 +8,11 @@ Copy this file into your project. It needs only `requests` (pip install requests
     api.models()                                                        # free key check -> ["zoe"]
     api.calculate("statement.csv", contract_terms={...})                # no AI, base price
     api.calculate("statement.xlsx", contracts=["deal.pdf"], expenses=[...])
+    #   -> {"summary": {...}, "payments": [...], "billing": {"credits": n, …}}
     api.parse_contract(["deal.pdf"], main_artist_name="Jane Doe")       # the deal as data
+    #   -> {"contract_terms": {...}, "splits": {"main_artist": …, "parties": [...]}, "billing": {...}}
     api.split_sheet(work_title="Blue Sky", date="6 Sept 2026", contributors=[...])  # PDF bytes
+    #   -> what it cost is in api.last_billing
     api.chat([{"role": "user", "content": "What is a mechanical royalty?"}])   # Zoe
     for delta in api.chat_stream([...]): print(delta, end="")
 
@@ -72,6 +75,9 @@ class MsaniiPartner:
         # Read timeout resets on every chunk; the server sends a heartbeat
         # every 15 s during a long parse, so 120 s never fires on a live run.
         self.timeout = timeout
+        # What the last split sheet cost — its body is the document, so the
+        # charge rides in headers. Empty until the first sheet.
+        self.last_billing: dict = {}
 
     # ---- endpoints ----------------------------------------------------------
 
@@ -91,7 +97,9 @@ class MsaniiPartner:
     ) -> dict:
         """Royalty calculation. Exactly one of `contracts` (PDFs, parsed by AI)
         or `contract_terms` (structured, no AI). Returns the result event:
-        {"payments": [...], "total_payments": n, "expense_review_required": bool}.
+        {"summary": {"payments": n, "total_payable": x, "expense_review_required": bool},
+         "payments": [{"song", "payee": {...}, "share": {...}, "amounts": {...}}],
+         "billing": {"credits": n, "request_id": "…"}}.
         """
         files = [("statement", _part(statement))]
         files += [("contracts", _part(c)) for c in contracts or []]
@@ -110,7 +118,8 @@ class MsaniiPartner:
         idempotency_key: str | None = None,
     ) -> dict:
         """The deal as data. Returns the result event:
-        {"contract_terms": {...}, "splits": {"parties": [...], "main_artist_found": bool}}.
+        {"contract_terms": {...}, "splits": {"main_artist": str | None, "parties": [...]},
+         "billing": {...}}.
         `contract_terms` is exactly what calculate() takes, so parse once and
         run every statement against it at the base price."""
         files = [("contracts", _part(c)) for c in contracts]
@@ -130,7 +139,9 @@ class MsaniiPartner:
     ) -> bytes:
         """A finished split sheet — the PDF (or DOCX) bytes, ready to save.
         Each contributor is {"name", "role", "publishing_share" | "writer_share" +
-        "publisher_share", "master_percentage", ...} as in the reference."""
+        "publisher_share", "master_percentage", ...} as in the reference.
+        What the last document cost, from the response headers, is in
+        `self.last_billing` (empty when the headers were absent)."""
         body = {
             "work_title": work_title,
             "work_type": work_type,
@@ -143,6 +154,7 @@ class MsaniiPartner:
         r = self.session.post(f"{self.base}/splitsheet/v1/documents", json=body, headers=headers, timeout=60)
         if r.status_code != 200:
             raise self._error(r)
+        self._record_billing(r.headers)
         return r.content
 
     def chat(self, messages: list[dict], *, temperature: float | None = None, max_tokens: int | None = None) -> str:
@@ -199,6 +211,21 @@ class MsaniiPartner:
         raise MsaniiError(
             "no_result", "The connection closed before a result arrived. Retry with the same Idempotency-Key."
         )
+
+    def _record_billing(self, headers) -> None:
+        """Read the charge off a document response. Never raises: the file is
+        already delivered and charged, so a missing or odd header only means
+        we cannot report the number."""
+        self.last_billing = {}
+        try:
+            credits = int(headers.get("Msanii-Credits", ""))
+        except (TypeError, ValueError):
+            return
+        self.last_billing = {
+            "credits": credits,
+            "request_id": headers.get("Msanii-Request-Id"),
+            "replayed": headers.get("Msanii-Replayed") == "true",
+        }
 
     @staticmethod
     def _json(r: requests.Response) -> dict:
@@ -272,6 +299,10 @@ SMOKE_CONTRIBUTORS = [
 ]
 
 
+def _sans_billing(res: dict) -> dict:
+    return {k: v for k, v in res.items() if k != "billing"}
+
+
 def smoke(base_url: str, api_key: str, statement: str | None, contract: str | None) -> int:
     api = MsaniiPartner(api_key, base_url)
     failures = 0
@@ -309,19 +340,26 @@ def smoke(base_url: str, api_key: str, statement: str | None, contract: str | No
         res = api.calculate(
             SMOKE_STATEMENT, contract_terms=SMOKE_TERMS, expenses=SMOKE_EXPENSES, idempotency_key="smoke-terms"
         )
-        got = {p["song_title"]: round(p["amount_to_pay"], 2) for p in res["payments"]}
+        got = {p["song"]: round(p["amounts"]["payable"], 2) for p in res["payments"]}
         assert got == SMOKE_EXPECTED, f"expected {SMOKE_EXPECTED}, got {got}"
-        assert res["expense_review_required"] is True, res
-        print(f"   {label}: {res['total_payments']} payments {got}")
+        assert res["summary"]["expense_review_required"] is True, res
+        assert res["summary"]["total_payable"] == 600.0, res["summary"]
+        print(f"   {label}: {res['summary']['payments']} payments {got} · {res['billing']['credits']} credits")
         return res
 
     def check_terms():
         first["result"] = run_terms("first run")
 
     def check_idempotent():
-        # Same key + same inputs: the replay returns the same result and is
-        # charged once per billing period (verify the charge in the team's ledger).
-        assert run_terms("replay, same Idempotency-Key") == first["result"], "replay returned a different result"
+        # Same key + same inputs: the replay returns the same result and says
+        # it was not charged again this billing period.
+        before = first.get("result")
+        assert before is not None, "the first run failed, so there is nothing to replay"
+        res = run_terms("replay, same Idempotency-Key")
+        # already_charged is advisory — a failed ledger read over-reports the
+        # price, so this can FAIL on correct behaviour; rare, and worth seeing.
+        assert res["billing"].get("replayed") is True and res["billing"]["credits"] == 0, res["billing"]
+        assert _sans_billing(res) == _sans_billing(before), "replay returned a different result"
 
     ZOE_ASK = [{"role": "user", "content": "In one sentence, what is a mechanical royalty?"}]
 
@@ -343,23 +381,27 @@ def smoke(base_url: str, api_key: str, statement: str | None, contract: str | No
             idempotency_key="smoke-sheet",
         )
         assert pdf.startswith(b"%PDF"), "not a PDF"
-        print(f"   {len(pdf):,} bytes")
+        assert api.last_billing, "no billing headers on the split sheet"
+        print(f"   {len(pdf):,} bytes · {api.last_billing['credits']} credits")
 
     def check_parse():
         res = api.parse_contract([contract], idempotency_key="smoke-parse")
         terms, splits = res["contract_terms"], res["splits"]
         assert terms["parties"], res
         print(f"   {len(terms['parties'])} parties, {len(terms['works'])} works, {len(terms['royalty_shares'])} shares")
+        print(f"   main artist: {splits['main_artist'] or '(not named)'} · {res['billing']['credits']} credits")
         for p in splits["parties"]:
             print(f"   {p['name']}: master {p['master_pct']}% publishing {p['publishing_pct']}%")
 
     def check_files():
         res = api.calculate(statement, contracts=[contract], idempotency_key="smoke-files")
-        assert res["total_payments"] >= 1, res
+        assert res["summary"]["payments"] >= 1, res
         for p in res["payments"]:
             print(
-                f"   {p['song_title']}: {p['party_name']} {p['percentage']}% [{p['basis']}] -> {p['amount_to_pay']:.2f}"
+                f"   {p['song']}: {p['payee']['name']} {p['share']['percentage']}% [{p['share']['basis']}]"
+                f" -> {p['amounts']['payable']:.2f}"
             )
+        print(f"   {res['billing']['credits']} credits")
 
     step("GET /zoe/v1/models (free key check)", check_models)
     step("GET /zoe/v1/models with a bad key -> 401 invalid_key", check_bad_key)

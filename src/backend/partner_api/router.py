@@ -213,6 +213,7 @@ async def partner_calculate(
                     # Structured context (available_columns, statement_songs…) —
                     # what a partner needs to fix the input without a human here.
                     "details": e.details,
+                    "billing": psvc.unbilled(),
                 }
             )
             return
@@ -224,9 +225,20 @@ async def partner_calculate(
                 "partner_oneclick_calc_failed",
                 {"error_code": "internal_error"},
             )
-            yield _sse({"type": "error", "code": "internal_error", "request_id": request_id})
+            yield _sse(
+                {"type": "error", "code": "internal_error", "request_id": request_id, "billing": psvc.unbilled()}
+            )
             return
-        yield _sse({"type": "result", **result})
+        # THE charge formula, computed BEFORE the frame so the body can report
+        # what this call costs; the debit still runs after the frame (below).
+        # A replay under an Idempotency-Key was charged on its first run — the
+        # debit RPC dedupes it — so the body says so instead of repeating the price.
+        # A racing duplicate reports the price while only one debit lands —
+        # over-reports, never under.
+        charge, charge_meta = compute_charge(psvc.ONECLICK_ACTION, price, measured, usage)
+        replayed = bool(idempotency_key) and psvc.already_charged(sb, request_id)
+        billing = psvc.billing_block(charge, request_id, replayed=replayed)
+        yield _sse({"type": "result", **result, "billing": billing})
         # Bill only AFTER the result is on the wire. Nothing below runs if the
         # client is gone: the yield above raises GeneratorExit on close, so a
         # partner who never received an answer is never charged for one. The
@@ -237,7 +249,6 @@ async def partner_calculate(
         # base / metered / base + size tail, 2026-08-27) — the partner path
         # must never grow its own max(). A debit failure must NOT turn a
         # finished calc into a partner-visible error — log loudly, result sent.
-        charge, charge_meta = compute_charge(psvc.ONECLICK_ACTION, price, measured, usage)
         try:
             psvc.debit_run(
                 sb,
@@ -252,7 +263,7 @@ async def partner_calculate(
         analytics_capture(
             ctx.org_id,
             "partner_oneclick_calc_completed",
-            {"total_payments": result["total_payments"], "charged": charge},
+            {"total_payments": result["summary"]["payments"], "charged": billing["credits"], "replayed": replayed},
         )
 
     return StreamingResponse(generate(), media_type="text/event-stream")

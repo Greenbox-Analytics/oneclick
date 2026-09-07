@@ -15,12 +15,13 @@ _spec.loader.exec_module(mp)
 
 
 class FakeResp:
-    def __init__(self, status, lines=(), body=None, content=b""):
+    def __init__(self, status, lines=(), body=None, content=b"", headers=None):
         self.status_code = status
         self.reason = "reason"
         self._lines = list(lines)
         self._body = body
         self.content = content
+        self.headers = headers or {}
 
     def iter_lines(self, decode_unicode=True):
         yield from self._lines
@@ -51,7 +52,12 @@ def test_iter_events_skips_pings_joins_multiline_and_flushes_tail():
 
 
 def test_calculate_sends_router_field_names_and_returns_result_event():
-    result = {"type": "result", "payments": [], "total_payments": 0, "expense_review_required": False}
+    result = {
+        "type": "result",
+        "summary": {"payments": 0, "total_payable": 0.0, "expense_review_required": False},
+        "payments": [],
+        "billing": {"credits": 30, "request_id": "r1"},
+    }
     api, calls = _client(FakeResp(200, [": ping", "", "data: " + json.dumps(result), ""]))
     out = api.calculate(
         ("s.csv", b"Title,Net Payable\nA,1\n"),
@@ -71,7 +77,9 @@ def test_calculate_sends_router_field_names_and_returns_result_event():
 
 
 def test_calculate_terms_mode_json_encodes_terms():
-    api, calls = _client(FakeResp(200, ['data: {"type":"result","payments":[],"total_payments":0}', ""]))
+    api, calls = _client(
+        FakeResp(200, ['data: {"type":"result","summary":{"payments":0},"payments":[],"billing":{"credits":30}}', ""])
+    )
     api.calculate(("s.csv", b"x"), contract_terms={"parties": []})
     assert json.loads(calls[0][1]["data"]["contract_terms"]) == {"parties": []}
     assert calls[0][1]["headers"] == {}
@@ -118,7 +126,8 @@ def test_parse_contract_sends_contracts_repeated_and_returns_both_views():
     result = {
         "type": "result",
         "contract_terms": {"parties": []},
-        "splits": {"parties": [], "main_artist_found": False},
+        "splits": {"main_artist": None, "parties": []},
+        "billing": {"credits": 30, "request_id": "r2"},
     }
     api, calls = _client(FakeResp(200, [": ping", "", "data: " + json.dumps(result), ""]))
     out = api.parse_contract([("a.pdf", b"%PDF"), ("b.pdf", b"%PDF")], main_artist_name="Jane", idempotency_key="p1")
@@ -131,7 +140,13 @@ def test_parse_contract_sends_contracts_repeated_and_returns_both_views():
 
 
 def test_split_sheet_posts_the_document_body_and_returns_bytes():
-    api, calls = _client(FakeResp(200, content=b"%PDF-1.4 sheet"))
+    api, calls = _client(
+        FakeResp(
+            200,
+            content=b"%PDF-1.4 sheet",
+            headers={"Msanii-Credits": "20", "Msanii-Request-Id": "s-1", "Msanii-Replayed": "true"},
+        )
+    )
     pdf = api.split_sheet(
         work_title="Blue Sky",
         date="6 Sept 2026",
@@ -139,6 +154,8 @@ def test_split_sheet_posts_the_document_body_and_returns_bytes():
         idempotency_key="s1",
     )
     assert pdf == b"%PDF-1.4 sheet"
+    # The body is the document, so the charge rides in headers.
+    assert api.last_billing == {"credits": 20, "request_id": "s-1", "replayed": True}
     url, kw = calls[0]
     assert url == "https://partner.example/splitsheet/v1/documents"
     assert kw["json"] == {
@@ -150,6 +167,17 @@ def test_split_sheet_posts_the_document_body_and_returns_bytes():
         "contributors": [{"name": "Jane", "role": "Producer", "master_percentage": 50}],
     }
     assert kw["headers"] == {"Idempotency-Key": "s1"}
+
+    # Headers missing (a proxy stripped them): report nothing, and clear the
+    # previous sheet's number rather than reporting it for this one.
+    api.session.post = lambda url, **kw: FakeResp(200, content=b"%PDF", headers={})
+    api.split_sheet(work_title="x", date="d", contributors=[{"name": "a", "role": "b"}])
+    assert api.last_billing == {}
+
+    # Credits only: no request id, not a replay.
+    api.session.post = lambda url, **kw: FakeResp(200, content=b"%PDF", headers={"Msanii-Credits": "20"})
+    api.split_sheet(work_title="x", date="d", contributors=[{"name": "a", "role": "b"}])
+    assert api.last_billing == {"credits": 20, "request_id": None, "replayed": False}
 
     api, _ = _client(FakeResp(402, body={"detail": {"code": "insufficient_credits", "price": 20, "balance": 1}}))
     with pytest.raises(mp.MsaniiError) as ei:
