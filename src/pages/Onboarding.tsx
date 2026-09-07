@@ -12,7 +12,10 @@ import StepName from "@/components/onboarding/StepName";
 import StepPreferences from "@/components/onboarding/StepPreferences";
 import StepPlan from "@/components/onboarding/StepPlan";
 import StepReady from "@/components/onboarding/StepReady";
+import StepTeamInvite from "@/components/onboarding/StepTeamInvite";
 import { markOnboardedCached } from "@/lib/onboardingCache";
+import { clearPendingInvite, orgInvitePath, readPendingInvite } from "@/lib/pendingInvite";
+import { useOrgInvitePreview } from "@/hooks/useOrgs";
 
 const TOTAL_STEPS = 5;
 
@@ -34,6 +37,25 @@ const Onboarding = () => {
   const [currentStep, setCurrentStep] = useState(0);
   const [checkingStatus, setCheckingStatus] = useState(true);
   const [finishing, setFinishing] = useState(false);
+
+  // Team invite carried through signup (src/lib/pendingInvite.ts). Read once
+  // on mount — OrgInviteClaim is the writer. An accepted invite is trusted as
+  // is; an unaccepted one is re-checked against the preview endpoint so a
+  // dead token (expired/declined elsewhere) falls back to the normal plan
+  // step instead of promising a team that isn't there.
+  const [pendingInvite] = useState(() => readPendingInvite());
+  const invitePreview = useOrgInvitePreview(
+    pendingInvite && !pendingInvite.accepted ? pendingInvite.token : null,
+  );
+  const inviteStillPending = !!pendingInvite && !pendingInvite.accepted && invitePreview.isSuccess;
+  const showTeamStep = !!pendingInvite && (pendingInvite.accepted || inviteStillPending);
+  const teamStepLoading = !!pendingInvite && !pendingInvite.accepted && invitePreview.isPending;
+  const inviteOrgName = pendingInvite?.accepted
+    ? pendingInvite.orgName ?? null
+    : invitePreview.data?.orgName ?? null;
+  const inviteOrgKind = pendingInvite?.accepted
+    ? pendingInvite.kind ?? null
+    : invitePreview.data?.kind ?? null;
 
   // Returning from a cancelled Stripe Checkout — show toast, jump back to plan step.
   // Profile was already saved before the redirect, so this is just resuming UI flow.
@@ -166,7 +188,28 @@ const Onboarding = () => {
     // ProtectedRoute can trust localStorage instead of racing the supabase
     // query for onboarding_completed.
     markOnboardedCached(user.id);
+    if (inviteStillPending && pendingInvite) {
+      // The invite hasn't been accepted yet — finish on the claim page so the
+      // last thing the user does is join the team. The stash stays until
+      // Accept/Decline resolve it there.
+      navigate(orgInvitePath(pendingInvite.token), { replace: true });
+      return;
+    }
+    if (pendingInvite?.accepted) clearPendingInvite();
     navigate("/dashboard", { replace: true, state: { fromOnboarding: true } });
+  };
+
+  /** Team-invite path from step 3 — same as Free (no subscription write),
+   * a member spends from the team pool on their own free tier. */
+  const handleTeamContinue = async () => {
+    captureOnboardingStepCompleted(STEP_NAMES[3]);
+    const { error } = await persistProfile();
+    if (error) {
+      toast.error("Couldn't save your profile — please retry");
+      return;
+    }
+    if (user) markOnboardedCached(user.id);
+    setCurrentStep(4);
   };
 
   /** Free path from the plan step — save profile + skip Stripe. */
@@ -256,7 +299,20 @@ const Onboarding = () => {
             onBack={() => setCurrentStep(1)}
           />
         )}
-        {currentStep === 3 && (
+        {currentStep === 3 && teamStepLoading && (
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+        )}
+        {currentStep === 3 && !teamStepLoading && showTeamStep && (
+          <StepTeamInvite
+            orgName={inviteOrgName}
+            kind={inviteOrgKind}
+            accepted={!!pendingInvite?.accepted}
+            onNext={handleTeamContinue}
+            onBack={() => setCurrentStep(2)}
+            isLoading={finishing}
+          />
+        )}
+        {currentStep === 3 && !teamStepLoading && !showTeamStep && (
           <StepPlan
             onChooseFree={handleChooseFree}
             onChoosePro={handleChooseBasic}
@@ -269,6 +325,7 @@ const Onboarding = () => {
             firstName={formData.firstName}
             onFinish={handleFinish}
             isLoading={finishing}
+            finishLabel={inviteStillPending ? "Review invitation" : undefined}
           />
         )}
       </div>

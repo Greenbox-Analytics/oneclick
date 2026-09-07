@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { Mail, Music, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
+import { orgInvitePath, readPendingInvite } from "@/lib/pendingInvite";
 
 const POLL_INTERVAL = 3500;
 const RESEND_COOLDOWN = 60;
@@ -20,7 +21,12 @@ const ConfirmEmail = () => {
       const { data } = await supabase.auth.getUser();
       if (data.user?.email_confirmed_at) {
         clearInterval(interval);
-        navigate("/onboarding", { replace: true });
+        // A stashed org invite (see Auth.tsx signup) takes the user to the
+        // claim page first; onboarding follows once they've accepted.
+        const invite = readPendingInvite();
+        navigate(invite && !invite.accepted ? orgInvitePath(invite.token) : "/onboarding", {
+          replace: true,
+        });
       }
     }, POLL_INTERVAL);
 
