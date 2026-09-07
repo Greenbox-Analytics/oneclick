@@ -45,7 +45,7 @@ const StepPreferences = ({
     <div className="flex flex-col items-center space-y-8 w-full max-w-sm animate-in fade-in duration-500">
       <div className="text-center space-y-2">
         <h2 className="text-2xl font-bold text-foreground">A few more details</h2>
-        <p className="text-muted-foreground">Help us personalize your experience.</p>
+        <p className="text-muted-foreground">Help us personalize your experience. </p>
       </div>
 
       <div className="w-full space-y-4">

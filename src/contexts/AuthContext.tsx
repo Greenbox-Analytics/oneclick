@@ -15,7 +15,7 @@ interface AuthContextType {
   session: Session | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string, fullName?: string) => Promise<void>;
+  signUp: (email: string, password: string, fullName?: string, redirectPath?: string) => Promise<void>;
   signInWithGoogle: (redirectPath?: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
@@ -97,7 +97,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     if (error) throw error;
   };
 
-  const signUp = async (email: string, password: string, fullName?: string) => {
+  const signUp = async (
+    email: string,
+    password: string,
+    fullName?: string,
+    redirectPath = '/onboarding',
+  ) => {
+    // The confirmation link may open in a fresh tab, so the post-confirm
+    // destination has to ride in the URL (e.g. an org invite claim page).
+    // Same-origin relative paths only, to avoid open-redirect abuse.
+    const safePath =
+      redirectPath.startsWith('/') && !redirectPath.startsWith('//')
+        ? redirectPath
+        : '/onboarding';
     const { error } = await supabase.auth.signUp({
       email,
       password,
@@ -105,7 +117,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         data: {
           full_name: fullName,
         },
-        emailRedirectTo: `${window.location.origin}/onboarding`,
+        emailRedirectTo: `${window.location.origin}${safePath}`,
       },
     });
     if (error) throw error;

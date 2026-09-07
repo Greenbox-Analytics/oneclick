@@ -6,9 +6,11 @@ interface StepReadyProps {
   firstName: string;
   onFinish: () => void;
   isLoading: boolean;
+  /** Overrides the "Go to Dashboard" button text (e.g. "Review invitation"). */
+  finishLabel?: string;
 }
 
-const StepReady = ({ preferredName, firstName, onFinish, isLoading }: StepReadyProps) => {
+const StepReady = ({ preferredName, firstName, onFinish, isLoading, finishLabel }: StepReadyProps) => {
   const displayName = preferredName.trim() || firstName.trim() || "there";
 
   return (
@@ -26,7 +28,7 @@ const StepReady = ({ preferredName, firstName, onFinish, isLoading }: StepReadyP
         </p>
       </div>
       <Button size="lg" onClick={onFinish} disabled={isLoading} className="px-8">
-        {isLoading ? "Setting up..." : "Go to Dashboard"}
+        {isLoading ? "Setting up..." : finishLabel ?? "Go to Dashboard"}
       </Button>
     </div>
   );

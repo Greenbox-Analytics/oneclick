@@ -265,6 +265,26 @@ export interface OrgInviteActionResult {
 // the caller instead of being swallowed into a generic toast.
 // ---------------------------------------------------------------------------
 
+/** GET /orgs/invites/{token}/preview — public, names the org an invite
+ * points at. 404 for an unknown, expired, or already-resolved token, so
+ * `isSuccess` doubles as "this invite is still pending". */
+export interface OrgInvitePreview {
+  orgName: string | null;
+  // "self_serve" | "enterprise" | null (pre-migration org row) — orgNoun()
+  // reads anything but "self_serve" as "organization".
+  kind: "self_serve" | "enterprise" | null;
+}
+
+export function useOrgInvitePreview(token: string | null | undefined) {
+  return useQuery<OrgInvitePreview>({
+    queryKey: ["org-invite-preview", token],
+    queryFn: () => apiFetch<OrgInvitePreview>(`${API_URL}/orgs/invites/${token}/preview`),
+    enabled: !!token,
+    retry: false,
+    staleTime: Infinity,
+  });
+}
+
 export function useAcceptOrgInvite() {
   const qc = useQueryClient();
   return useMutation<OrgInviteActionResult, Error, string>({

@@ -412,6 +412,7 @@ Both environments share the same Supabase database — data is user-scoped.
 
 - Dev backend deploys on push to `main` (only when `src/backend/**` changes)
 - Prod deploys on tag push (`v*`) — create via `git tag v1.0.0 && git push origin v1.0.0` or GitHub Releases UI
+- **Supabase auth config is code**: `supabase/config.toml` + `supabase/templates/` are pushed to the hosted project by `supabase-config.yml` on merge to `main` (`supabase config push`). CAUTION: push sends CLI DEFAULTS for any recognized key missing from the file (this once flipped `enable_confirmations` off in prod, auto-confirming signups) and the redirect-URL list REPLACES the dashboard's. Pin every auth key you rely on explicitly, and never edit auth settings in the dashboard alone — they'll be overwritten on the next merge.
 
 ## Design Spec
 

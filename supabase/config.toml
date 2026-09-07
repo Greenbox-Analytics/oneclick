@@ -1,1 +1,76 @@
 project_id = "sfugklkakdflrqhmkfps"
+
+# Auth URL configuration. Declared explicitly so a `config push` can never
+# reset them to the CLI defaults (http://127.0.0.1:3000). site_url is the
+# fallback redirect for auth links; additional_redirect_urls must cover every
+# origin the app runs on, because the frontend passes
+# `emailRedirectTo: window.location.origin + path` (AuthContext.tsx).
+# BEFORE the first push: compare with Dashboard → Authentication → URL
+# Configuration and copy any extra entries here — this list REPLACES the
+# dashboard's, it does not merge.
+[auth]
+site_url = "https://www.msanii-beta.com"
+additional_redirect_urls = [
+  "https://www.msanii-beta.com/**",
+  "https://msanii-beta.com/**",
+  "http://localhost:8080/**",
+  # Add the dev/Vercel deployment origin(s) here, e.g. "https://<app>.vercel.app/**".
+]
+
+# WARNING: `supabase config push` applies CLI DEFAULTS for any key it knows
+# about that is missing from this file. enable_confirmations defaults to
+# FALSE, and pushing without it turned off email confirmation in production
+# (2026-08-29: users were auto-confirmed and got the welcome email instead).
+# Every auth key we rely on is therefore pinned explicitly below. ALWAYS read
+# the diff `config push` prints before confirming it.
+[auth.email]
+enable_signup = true
+enable_confirmations = true
+double_confirm_changes = true
+secure_password_change = false
+
+# Auth emails per hour, PROJECT-WIDE (signups, resends, resets, magic links,
+# email changes all share the bucket). The CLI default is 2, which every
+# unpinned push re-applied — two signups in an hour and the third request
+# failed with "email rate limit exceeded". Editable only because custom SMTP
+# is enabled below; Resend's relay has no trouble at this rate.
+[auth.rate_limit]
+email_sent = 30
+
+# Auth email templates. The hosted project reads these on `supabase config push`
+# (Auth → Email Templates in the dashboard shows the same fields); local
+# `supabase start` uses them directly. Keep the design in step with the backend
+# email shell in src/backend/orgs/emails.py.
+[auth.email.template.confirmation]
+subject = "Confirm your email for Msanii"
+content_path = "./supabase/templates/confirm_signup.html"
+
+[auth.email.template.magic_link]
+subject = "Your sign-in link for Msanii"
+content_path = "./supabase/templates/magic_link.html"
+
+[auth.email.template.recovery]
+subject = "Reset your Msanii password"
+content_path = "./supabase/templates/recovery.html"
+
+[auth.email.template.email_change]
+subject = "Confirm your new email for Msanii"
+content_path = "./supabase/templates/email_change.html"
+
+[auth.email.template.invite]
+subject = "You've been invited to Msanii"
+content_path = "./supabase/templates/invite.html"
+
+# Send auth emails through Resend (the same account/domain as the backend's
+# transactional mail). Resend's SMTP relay authenticates with the literal
+# username "resend" and an API key as the password; the key is read from the
+# environment at `supabase config push` time, never stored here.
+# sender must be an address on the Resend-verified domain (same as RESEND_FROM_EMAIL).
+[auth.email.smtp]
+enabled = true
+host = "smtp.resend.com"
+port = 465
+user = "resend"
+pass = "env(RESEND_API_KEY)"
+admin_email = "noreply@msanii-beta.com"
+sender_name = "Msanii"
