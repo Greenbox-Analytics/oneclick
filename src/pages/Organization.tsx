@@ -9,8 +9,8 @@
 // while the flag is off simply surfaces the backend's 404 as a toast, same
 // as any other disabled-feature attempt.
 import { useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { Building2, Loader2, Mail, Send } from "lucide-react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Building2, KeyRound, Loader2, Mail, Send } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Card } from "@/components/ui/card";
@@ -37,9 +37,12 @@ import {
   type OrgSummary,
   type OrgDetail,
 } from "@/hooks/useOrgs";
+import { CopyButton } from "@/components/ui/copy-button";
 import { OrgPoolCard } from "@/components/orgs/OrgPoolCard";
-import { OrgBillingPanel } from "@/components/orgs/OrgBillingPanel";
+import { OrgBillingPanel, adminName } from "@/components/orgs/OrgBillingPanel";
 import { OrgSeatsTable } from "@/components/orgs/OrgSeatsTable";
+import { OrgApiKeysPanel } from "@/components/orgs/OrgApiKeysPanel";
+import { OrgUsageAnalysis } from "@/components/orgs/OrgUsageAnalysis";
 import { OrgInvitesPanel } from "@/components/orgs/OrgInvitesPanel";
 import { OrgRequestsPanel } from "@/components/orgs/OrgRequestsPanel";
 import { OrgSettingsPanel } from "@/components/orgs/OrgSettingsPanel";
@@ -155,13 +158,26 @@ function CreateOrgPanel({ onCreated }: { onCreated?: (orgId: string) => void }) 
   );
 }
 
-function OrgHeader({ org }: { org: OrgSummary }) {
+function OrgHeader({ org }: { org: OrgDetail }) {
+  // What KIND of org this is, stated once. Self-serve teams ride on a
+  // member's Basic/Pro slot; enterprise orgs are set up by Msanii and use none.
+  const coverer = org.kind === "self_serve" && org.covered_at ? adminName(org, org.covered_by) : null;
+  const kindLabel =
+    org.kind === "self_serve" ? (coverer ? `Team · covered by ${coverer}'s plan` : "Team") : "Enterprise organization";
   return (
     <div className="mb-6 flex items-center gap-3 flex-wrap">
       <div>
         <h1 className="text-3xl font-bold tracking-tight text-foreground">{org.name}</h1>
         <p className="text-muted-foreground mt-1">{orgNounCap(org.kind)} credits, seats, and members</p>
+        {/* Already in this page's URL — surfaced so support and API setup
+            don't have to dig it out of the address bar. */}
+        <div className="flex items-center gap-1.5 mt-1">
+          <span className="text-[12px] text-muted-foreground">ID</span>
+          <code className="text-[12px] font-mono text-muted-foreground">{org.id}</code>
+          <CopyButton text={org.id} label="Copy team ID" />
+        </div>
       </div>
+      <Badge variant="outline">{kindLabel}</Badge>
       {org.status === "pending" && (
         <Badge variant="outline" className="border-amber-500/30 text-amber-700 dark:text-amber-400 bg-amber-500/10">
           Pending activation
@@ -217,6 +233,32 @@ function StandingBanner({ org }: { org: OrgDetail }) {
   return null;
 }
 
+/** Shown to a team admin whose org lacks the partner capability bit, so the
+ * API is discoverable without being self-enableable: the bit is Msanii-admin
+ * only (on by default for enterprise orgs). */
+function ApiAccessTeaser() {
+  return (
+    <Card className="p-5 flex items-start justify-between gap-4 flex-wrap">
+      <div className="flex flex-col gap-1">
+        <h3 className="text-[15px] font-semibold flex items-center gap-2">
+          <KeyRound className="w-4 h-4" /> API access
+        </h3>
+        <p className="text-[13px] text-muted-foreground max-w-prose">
+          Run Msanii&apos;s tools — royalty calculations, splits from contracts, split sheets and Zoe — from your own systems. Included with Enterprise plans.
+        </p>
+      </div>
+      <div className="flex items-center gap-2">
+        <Button asChild size="sm" variant="ghost">
+          <Link to="/docs?section=api">Read the API docs</Link>
+        </Button>
+        <Button asChild size="sm" variant="outline">
+          <Link to="/contact">Talk to us about Enterprise</Link>
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
 function AdminConsole({ orgId }: { orgId: string }) {
   const { user } = useAuth();
   const { data: org, isLoading } = useOrg(orgId);
@@ -243,6 +285,8 @@ function AdminConsole({ orgId }: { orgId: string }) {
       <OrgPoolCard org={org} />
       {isSelfServe && <OrgBillingPanel org={org} />}
       <OrgSeatsTable orgId={orgId} currentUserId={user?.id} orgKind={org.kind} />
+      <OrgUsageAnalysis orgId={orgId} partnerApiEnabled={!!org.partner_api_enabled} />
+      {org.partner_api_enabled ? <OrgApiKeysPanel orgId={orgId} /> : <ApiAccessTeaser />}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-[22px] items-start">
         <OrgInvitesPanel orgId={orgId} orgKind={org.kind} />
         <OrgRequestsPanel orgId={orgId} seats={usage?.seats ?? []} />

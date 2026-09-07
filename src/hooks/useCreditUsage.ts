@@ -1,6 +1,7 @@
 import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import type { FolderUsageRow, PartnerKeyUsageRow, UsageRange } from "@/hooks/useOrgs";
 
 export type CreditAction = "oneclick_run" | "registry_parse" | "zoe_message" | "split_sheet";
 
@@ -39,6 +40,34 @@ export function useCreditUsage(enabled = true) {
     queryKey: ["credit-usage", user?.id],
     queryFn: () => apiFetch<CreditUsage>(`${API_URL}/me/credits/usage`),
     enabled: !!user?.id && enabled,
+    staleTime: 30_000,
+  });
+}
+
+/** One org's partner spend through keys the CALLER created — the same row
+ * shapes as the org payload, without its admin-only pool half. */
+export interface MyOrgApiUsage {
+  orgId: string;
+  orgName: string | null;
+  since: string | null;
+  credits: number;
+  runs: number;
+  byKey: PartnerKeyUsageRow[];
+  byFolder: FolderUsageRow[];
+}
+
+export interface MyApiUsage {
+  range: UsageRange;
+  orgs: MyOrgApiUsage[];
+}
+
+/** GET /me/api-usage — the profile's "My API usage" card. */
+export function useMyApiUsage(range: UsageRange = "mtd") {
+  const { user } = useAuth();
+  return useQuery<MyApiUsage>({
+    queryKey: ["me", "api-usage", range],
+    queryFn: () => apiFetch<MyApiUsage>(`${API_URL}/me/api-usage?range=${range}`),
+    enabled: !!user?.id,
     staleTime: 30_000,
   });
 }

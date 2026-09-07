@@ -42,14 +42,18 @@ export function PlanCard() {
           </div>
           <div className="flex gap-1.5">
             <AdminBadge />
-            <Badge className="uppercase">{managedByOrg.kind === "self_serve" ? "Team" : ENTERPRISE_LABEL}</Badge>
+            <Badge className="uppercase">{tierLabel(ent?.tier ?? "free")}</Badge>
           </div>
         </div>
 
         <div className="mt-4 bg-background border border-border rounded-xl px-[18px] py-4">
-          <div className="text-sm font-semibold">Billing is managed by {managedByOrg.orgName}.</div>
+          <div className="text-sm font-semibold">
+            Billing is managed by {managedByOrg.orgName}
+            {managedByOrg.kind === "self_serve" ? " — a team." : ` — an ${ENTERPRISE_LABEL} organization.`}
+          </div>
           <p className="text-[12.5px] text-muted-foreground mt-1 max-w-[440px]">
-            {managedByOrg.orgName} covers your credits and access here — there&apos;s nothing to upgrade or pay for.
+            While you&apos;re working as {managedByOrg.orgName}, its credit pool pays for your AI work. Your own plan
+            above still applies to your personal workspace.
           </p>
         </div>
 

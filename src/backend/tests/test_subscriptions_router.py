@@ -336,3 +336,148 @@ class TestCreditUsageEndpoint:
 
         assert "monthlyGrant" in data
         assert "balance" in data
+
+
+class TestMyApiUsageEndpoint:
+    """GET /me/api-usage — partner-API spend through the CALLER's own keys."""
+
+    ORG = "10000000-0000-0000-0000-0000000000a1"
+    MEMBER_ROW = {
+        "id": "m1",
+        "org_id": ORG,
+        "user_id": TEST_USER_ID,
+        "role": "member",
+        "status": "active",
+        "email": "me@example.com",
+        "monthly_cap": None,
+        "cap_used": 0,
+    }
+    WALLET = {
+        "id": "w1",
+        "owner_type": "org",
+        "owner_id": ORG,
+        "bundle_balance": 0,
+        "reserve_balance": 100,
+        "period_start": "2026-09-01T00:00:00+00:00",
+        "period_end": "2026-10-01T00:00:00+00:00",
+    }
+    MY_KEY = {
+        "id": "k-mine",
+        "label": "Mine",
+        "key_prefix": "mk_live_mine",
+        "status": "active",
+        "expires_at": None,
+        "revoked_at": None,
+        "folder_id": None,
+        "created_by": TEST_USER_ID,
+    }
+
+    def _debit(self, key_id, delta):
+        return {
+            "kind": "debit",
+            "delta": delta,
+            "action": "partner_oneclick_run",
+            "metadata": {"source": "partner_api", "partner_key_id": key_id},
+            "created_at": "2026-09-03T10:00:00+00:00",
+        }
+
+    def _wire(self, mock_supabase, *, members, keys, ledger):
+        from tests.conftest import _default_table_side_effect
+
+        builders = {}
+
+        def side_effect(name):
+            b = _default_table_side_effect(name)
+            b.eq = MagicMock(side_effect=lambda *a: b)
+            if name == "org_members":
+                b.execute.return_value = MagicMock(data=members, count=len(members))
+            elif name == "partner_api_keys":
+                b.execute.return_value = MagicMock(data=keys, count=len(keys))
+            elif name == "partner_key_folders":
+                b.execute.return_value = MagicMock(data=[], count=0)
+            elif name == "credit_ledger":
+                b.execute.return_value = MagicMock(data=ledger, count=len(ledger))
+            elif name == "credit_wallets":
+                b.execute.return_value = MagicMock(data=[self.WALLET], count=1)
+            elif name == "organizations":
+                b.execute.return_value = MagicMock(data=[{"id": self.ORG, "name": "Acme"}], count=1)
+            builders.setdefault(name, []).append(b)
+            return b
+
+        mock_supabase.table.side_effect = side_effect
+        return builders
+
+    def test_only_my_keys_are_counted(self, client, mock_supabase, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        builders = self._wire(
+            mock_supabase,
+            members=[self.MEMBER_ROW],
+            keys=[self.MY_KEY],  # the created_by filter is server-side
+            ledger=[self._debit("k-mine", -30), self._debit("k-theirs", -70)],
+        )
+        resp = client.get("/me/api-usage")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["range"] == "mtd"
+        (org,) = body["orgs"]
+        assert org["orgId"] == self.ORG and org["orgName"] == "Acme"
+        assert org["since"] == self.WALLET["period_start"]
+        # A colleague's key contributed nothing — not to the totals, not to a
+        # "No folder" bucket.
+        assert (org["credits"], org["runs"]) == (30, 1)
+        assert [k["keyId"] for k in org["byKey"]] == ["k-mine"]
+        assert org["byFolder"] == [
+            {
+                "folderId": None,
+                "name": "No folder",
+                "keys": 1,
+                "credits": 30,
+                "runs": 1,
+                "byAction": [{"action": "partner_oneclick_run", "credits": 30, "runs": 1}],
+                "series": [
+                    {
+                        "day": "2026-09-03",
+                        "actions": [{"action": "partner_oneclick_run", "credits": 30, "runs": 1}],
+                    }
+                ],
+            }
+        ]
+        # Both scopes are enforced by the query, not in Python.
+        member_eqs = [c.args for c in builders["org_members"][0].eq.call_args_list]
+        assert ("user_id", TEST_USER_ID) in member_eqs and ("status", "active") in member_eqs
+        assert ("created_by", TEST_USER_ID) in [c.args for c in builders["partner_api_keys"][0].eq.call_args_list]
+
+    def test_org_without_my_keys_is_omitted(self, client, mock_supabase, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        self._wire(mock_supabase, members=[self.MEMBER_ROW], keys=[], ledger=[self._debit("k-theirs", -70)])
+        assert client.get("/me/api-usage").json() == {"range": "mtd", "orgs": []}
+
+    def test_no_memberships_short_circuits(self, client, mock_supabase, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        builders = self._wire(mock_supabase, members=[], keys=[self.MY_KEY], ledger=[])
+        assert client.get("/me/api-usage").json() == {"range": "mtd", "orgs": []}
+        assert "partner_api_keys" not in builders  # no rollup run at all
+
+    def test_unknown_range_422(self, client, mock_supabase, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        builders = self._wire(mock_supabase, members=[self.MEMBER_ROW], keys=[self.MY_KEY], ledger=[])
+        resp = client.get("/me/api-usage?range=30d")
+        assert resp.status_code == 422 and resp.json()["detail"]["code"] == "invalid_range"
+        assert builders == {}
+
+    def test_flags_off_returns_empty_without_touching_db(self, client, mock_supabase, monkeypatch):
+        """Both flags off (the test-default) is a 200 with an empty payload
+        and no rollup call — /me/api-usage must not reach the DB at all."""
+        monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+        monkeypatch.delenv("LICENSING_ENABLED", raising=False)
+        from unittest.mock import patch
+
+        with patch("orgs.service.org_usage_rollup") as rollup:
+            resp = client.get("/me/api-usage")
+        assert resp.status_code == 200
+        assert resp.json() == {"range": "mtd", "orgs": []}
+        rollup.assert_not_called()

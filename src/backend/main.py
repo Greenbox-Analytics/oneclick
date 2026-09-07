@@ -56,6 +56,11 @@ from oneclick.royalties.router import router as royalties_router
 from oneclick.royalty_calculator import CalculationError, RoyaltyCalculator
 from oneclick.share import router as oneclick_share_router
 from orgs.router import router as orgs_router
+from partner_api.org_router import router as partner_org_keys_router
+from partner_api.registry import registry_router as partner_registry_router
+from partner_api.router import oneclick_router as partner_oneclick_router
+from partner_api.splitsheet import splitsheet_router as partner_splitsheet_router
+from partner_api.zoe import zoe_router as partner_zoe_router
 from projects.router import router as projects_router
 from projects.share_email import router as projects_share_email_router
 from registry.router import router as registry_router
@@ -95,6 +100,13 @@ app.include_router(billing_router)
 app.include_router(sweep_router)
 app.include_router(admin_analytics_router, prefix="/admin/analytics", tags=["admin-analytics"])
 app.include_router(orgs_router, prefix="/orgs", tags=["Organizations"])
+app.include_router(partner_org_keys_router, prefix="/orgs", tags=["Partner API Keys"])
+# One router per tool, each carrying its own prefix. The tuple is also the
+# host lockdown's allowlist.
+PARTNER_API_ROUTERS = (partner_oneclick_router, partner_registry_router, partner_splitsheet_router, partner_zoe_router)
+for _r in PARTNER_API_ROUTERS:
+    app.include_router(_r, tags=["Partner API"])
+_PARTNER_API_PATHS = [route.path_regex for _r in PARTNER_API_ROUTERS for route in _r.routes]
 
 # The internal event bus (integrations/events.py) currently has NO subscribers — Slack was
 # the only one. emit() calls throughout the app are cheap no-ops until an integration
@@ -155,6 +167,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # The partner API's billing headers and the download filename: a browser
+    # hides every custom response header not listed here.
+    expose_headers=["Content-Disposition", "Msanii-Credits", "Msanii-Request-Id", "Msanii-Replayed"],
 )
 
 
@@ -174,6 +189,23 @@ from fastapi.responses import JSONResponse as _JSONResponse
 
 _uncaught_logger = _logging.getLogger("uvicorn.error")
 logger = _logging.getLogger(__name__)
+
+
+# Partner host lockdown. Service #2 runs THIS image with PARTNER_API_ENABLED
+# set, so without it every product route — admin, Stripe webhooks, /docs —
+# answers on api.<domain> and on the raw *.run.app URL that bypasses the edge.
+# This makes the boundary a property of the build, not of a WAF rule someone
+# has to remember. Product services never set the flag, so it is a no-op there.
+@app.middleware("http")
+async def _partner_host_lockdown(request, call_next):
+    from partner_api.service import partner_api_enabled
+
+    # By ROUTE, not prefix: the API shares /oneclick and /zoe with product
+    # routes, and only the partner routers' own paths may answer here.
+    path = request.url.path
+    if partner_api_enabled() and not (path == "/health" or any(rx.match(path) for rx in _PARTNER_API_PATHS)):
+        return _JSONResponse({"detail": "Not found"}, status_code=404)
+    return await call_next(request)
 
 
 @app.exception_handler(Exception)
@@ -2564,13 +2596,6 @@ async def oneclick_calculate_royalties_stream(
 
                 # --- CACHE HIT (probed pre-gate; no re-query) ---
                 if cached_calc is not None:
-                    # Charge-on-success. This branch is inside set_llm_context and
-                    # makes no LLM call, so it measures 0 and pays exactly the base
-                    # — the price of the deliverable, which is identical to a fresh
-                    # run's. The debit is idempotent per billing period via the
-                    # grant's deterministic request_id, so an SSE reconnect or a
-                    # double-submit cannot charge twice for the same cached result.
-                    _get_entitlements_service().debit_for_action(user_id, oneclick_grant)
                     yield f"data: {json.dumps({'type': 'status', 'message': 'Found cached results!', 'progress': 100, 'stage': 'complete'})}\n\n"
 
                     result = cached_calc["results"]
@@ -2638,6 +2663,14 @@ async def oneclick_calculate_royalties_stream(
                         print(f"[royalties] cache-hit sync failed for calc {cached_calc['id']}: {e}")
 
                     yield f"data: {json.dumps(result)}\n\n"
+                    # Charge only once the frame is on the wire: a client that
+                    # dropped closes this generator at the yield above and is
+                    # never billed for an answer it did not get. No LLM call
+                    # here, so it measures 0 and pays the base — the same price
+                    # a fresh run charges for the same deliverable. Idempotent
+                    # per period via the grant's request_id, so a reconnect or
+                    # double-submit cannot charge twice.
+                    _get_entitlements_service().debit_for_action(user_id, oneclick_grant)
                     if gate_event:
                         yield f"data: {json.dumps(gate_event)}\n\n"
                     return
@@ -2858,15 +2891,13 @@ async def oneclick_calculate_royalties_stream(
                     "review": review,
                 }
 
-                # Charge on success: calculation completed, results streaming out.
-                # Fresh-computation path. The cache-hit branch above charges its
-                # own base before returning, so both paths bill exactly once.
-                # ACCEPTED RESIDUAL (plan round 3): a deliberate disconnect after
-                # the LLM work but before this event = free run; measurable via
-                # ai_usage_log success=true rows with no matching ledger debit.
-                _get_entitlements_service().debit_for_action(user_id, oneclick_grant)
-
                 yield f"data: {json.dumps(result)}\n\n"
+
+                # Success means DELIVERED: the yield above raises GeneratorExit
+                # if the client is gone, so an undelivered run is free (owner
+                # decision 2026-09-04 — that loss is ours). The cache-hit branch
+                # charges the same way, so both bill exactly once.
+                _get_entitlements_service().debit_for_action(user_id, oneclick_grant)
 
                 # Fires for overall="unavailable" too — the event's `overall` property lets
                 # dashboards separate completed verifications from failed passes.

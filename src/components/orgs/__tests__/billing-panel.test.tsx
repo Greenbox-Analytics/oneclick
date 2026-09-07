@@ -32,6 +32,7 @@ vi.mock("@/hooks/useOrgs", () => ({
 
 vi.mock("@/hooks/useCreditPacks", () => ({
   useCreditPacks: () => ({ data: packsData, isLoading: packsLoading }),
+  useCreateTopupSession: () => ({ mutate: vi.fn(), isPending: false, error: null, variables: undefined }),
 }));
 
 vi.mock("@/hooks/useBilling", () => ({
@@ -60,6 +61,12 @@ const baseOrg: OrgDetail = {
 };
 
 describe("OrgBillingPanel", () => {
+  it("offers a one-off buy into the pool beside the transfer, not only the monthly top-up", () => {
+    render(<OrgBillingPanel org={baseOrg} />);
+    expect(screen.getByRole("button", { name: /^buy credits$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^transfer credits$/i })).toBeInTheDocument();
+  });
+
   it("renders the required 'team pool' copy", () => {
     render(<OrgBillingPanel org={baseOrg} />);
     expect(screen.getByText(/team ai work uses the team pool/i)).toBeInTheDocument();

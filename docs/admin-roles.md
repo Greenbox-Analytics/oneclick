@@ -28,7 +28,7 @@ A user is admin if **either** path is true. The check is unified in one helper â
 | GET | `/admin/me` | Returns `{ email, isAdmin: true }`. Used by `useIsAdmin` to gate the UI |
 | GET | `/admin/users` | Paginated user list with `tier`, `has_override`, `is_admin`, `is_env_admin` |
 | GET | `/admin/users/{user_id}` | User detail: identity + admin flags + entitlements + raw override row |
-| POST | `/admin/users/{user_id}/grant` | Set subscription tier to `pro` (admin-grant, no Stripe) |
+| POST | `/admin/users/{user_id}/grant` | Manual paid-tier grant, no Stripe. Body `{"tier": "basic" \| "pro"}`; no body = `basic`. `/revoke` drops to `free` |
 | POST | `/admin/users/{user_id}/revoke` | Set subscription tier to `free` |
 | POST | `/admin/users/{user_id}/promote` | `profiles.is_admin = true` |
 | POST | `/admin/users/{user_id}/demote` | `profiles.is_admin = false` â€” see safeguards below |

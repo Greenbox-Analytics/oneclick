@@ -48,6 +48,7 @@ import {
   type OrgSeatUsage,
 } from "@/hooks/useOrgs";
 import { TransferCreditsDialog } from "@/components/orgs/TransferCreditsDialog";
+import { TopUpCreditsDialog } from "@/components/billing/TopUpCreditsDialog";
 
 // Kind -> icon + fallback label, used verbatim when the identity behind a row
 // can't be resolved (departed member, missing metadata) — never a raw UUID.
@@ -314,6 +315,7 @@ function StorageSection({ org }: { org: OrgDetail }) {
 export function OrgBillingPanel({ org }: { org: OrgDetail }) {
   const { openPortal, isPending: isOpeningPortal } = useOpenBillingPortal();
   const [transferOpen, setTransferOpen] = useState(false);
+  const [buyOpen, setBuyOpen] = useState(false);
 
   return (
     <Card className="p-6">
@@ -321,12 +323,19 @@ export function OrgBillingPanel({ org }: { org: OrgDetail }) {
         <div>
           <div className="text-[15px] font-semibold">Billing</div>
           <div className="text-[13.5px] text-muted-foreground mt-0.5 max-w-[520px]">
-            Team AI work uses the team pool — top it up or transfer credits.
+            Team AI work uses the team pool. Three ways to fill it: buy credits into it, move credits you already
+            own, or set up a monthly top-up below.
           </div>
         </div>
-        <Button size="sm" variant="outline" onClick={() => setTransferOpen(true)}>
-          Transfer credits
-        </Button>
+        {/* The two one-off inlets side by side; the recurring one has its own section. */}
+        <div className="flex gap-2">
+          <Button size="sm" onClick={() => setBuyOpen(true)}>
+            Buy credits
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setTransferOpen(true)}>
+            Transfer credits
+          </Button>
+        </div>
       </div>
 
       <div className="mt-5 space-y-6">
@@ -345,7 +354,14 @@ export function OrgBillingPanel({ org }: { org: OrgDetail }) {
         </Button>
       </div>
 
-      <TransferCreditsDialog orgId={org.id} orgName={org.name} open={transferOpen} onOpenChange={setTransferOpen} />
+      <TransferCreditsDialog
+        orgId={org.id}
+        orgName={org.name}
+        open={transferOpen}
+        onOpenChange={setTransferOpen}
+        onBuyCredits={() => setBuyOpen(true)}
+      />
+      <TopUpCreditsDialog open={buyOpen} onOpenChange={setBuyOpen} orgId={org.id} orgName={org.name} />
     </Card>
   );
 }

@@ -10,7 +10,7 @@ import {
   Info, CheckCircle2, Zap, Volume2, StickyNote, Settings, Lock,
   Scale, FileCheck, UserPlus, Pencil, User, LogOut,
   AlertTriangle, Copy, Search, Plug, ThumbsUp, ThumbsDown, Wallet,
-  DollarSign, Receipt, BarChart3, SplitSquareHorizontal, Coins,
+  DollarSign, Receipt, BarChart3, SplitSquareHorizontal, Coins, KeyRound, ChevronRight, List,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
@@ -18,6 +18,13 @@ import { useSmartBack } from "@/hooks/useSmartBack";
 import { useToolPrices } from "@/hooks/useCreditPacks";
 import { ACTION_ORDER, estimateCredits, SIZED_ACTIONS, TOOL_META, type ToolCreditPrices } from "@/lib/credits";
 import type { CreditAction } from "@/hooks/useCreditUsage";
+import { useCopied } from "@/components/ui/copy-button";
+import { PartnerApiConsole, type ConsoleKind } from "@/components/docs/PartnerApiConsole";
+import { MethodBadge, ResponseExample, Tag } from "@/components/docs/apiBits";
+import {
+  API_SAMPLES, ERROR_EVENT_RESPONSE, PARTNER_API_URL, REGISTRY_PRICE, ROYALTIES_PRICE, ROYALTIES_RESPONSE,
+  SPLIT_SHEET_HEADERS, SPLIT_SHEET_PRICE, SPLIT_SHEET_SAMPLE, SPLITS_RESPONSE, ZOE_PRICE, ZOE_RESPONSE,
+} from "@/components/docs/partnerApiSamples";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuTrigger,
@@ -32,12 +39,15 @@ const HIDE_REGISTRY_AND_WORKS = false;
 
 interface SectionMeta { id: string; label: string; icon: React.ElementType; group: string; }
 
-const NAV_GROUPS: { group: string; ids: string[] }[] = [
+// Two sidebar folds: Platform (grouped below) and API. The flat SECTIONS list
+// still carries "api" last, so prev/next and the mobile chips reach it.
+const PLATFORM_GROUPS: { group: string; ids: string[] }[] = [
   { group: "Getting started", ids: ["getting-started"] },
   { group: "Roster & projects", ids: ["artist-management", "portfolio", "project-detail", "work-detail", "rights-registry"] },
   { group: "Tools", ids: ["oneclick", "royalty-tracking", "zoe", "split-sheet"] },
-  { group: "Platform", ids: ["workspace", "integrations", "credits", "best-practices"] },
+  { group: "Workspace", ids: ["workspace", "integrations", "credits", "best-practices"] },
 ];
+const NAV_GROUPS = [...PLATFORM_GROUPS, { group: "Platform", ids: ["api"] }];
 
 const SECTION_LABELS: Record<string, { label: string; icon: React.ElementType }> = {
   "getting-started": { label: "Getting Started", icon: Rocket },
@@ -52,6 +62,7 @@ const SECTION_LABELS: Record<string, { label: string; icon: React.ElementType }>
   "split-sheet": { label: "Split Sheet", icon: Scale },
   workspace: { label: "Workspace", icon: LayoutGrid },
   integrations: { label: "Integrations", icon: Plug },
+  api: { label: "API", icon: KeyRound },
   credits: { label: "Credits & Pricing", icon: Coins },
   "best-practices": { label: "Best Practices", icon: Lightbulb },
 };
@@ -82,12 +93,128 @@ const SECTION_DESCRIPTIONS: Record<string, string> = {
   "artist-management": "Manage your roster with profiles, streaming links, and organized projects.",
   workspace: "Your project-management hub with Kanban boards, a calendar, and integrations.",
   integrations: "Connect Msanii to Google Drive — and see what's coming next.",
+  api: "Run Msanii's tools from your own systems — royalty calculations, splits from contracts, split sheets and Zoe — with request and response shapes, billing, and a live console.",
   credits: "What each AI action costs, and what's free.",
   "best-practices": "Tips for getting the most out of Msanii.",
 };
 
 // Lets content-level cards switch the active section (avoids prop drilling).
 const SelectSectionContext = createContext<(id: string) => void>(() => {});
+
+// ---- API reference: tabs, sidebar nav, console kind ----
+
+type ApiTabId = "overview" | "royalties" | "registry" | "splitsheet" | "zoe" | "errors" | "billing";
+
+const API_TABS: { id: ApiTabId; label: string }[] = [
+  { id: "overview", label: "Overview" },
+  { id: "royalties", label: "Royalty calculation" },
+  { id: "registry", label: "Splits" },
+  { id: "splitsheet", label: "Split sheet" },
+  { id: "zoe", label: "Zoe" },
+  { id: "errors", label: "Errors" },
+  { id: "billing", label: "Billing & limits" },
+];
+const API_TAB_IDS = new Set<string>(API_TABS.map((t) => t.id));
+const parseApiTab = (s: string | null): ApiTabId => (s && API_TAB_IDS.has(s) ? (s as ApiTabId) : "overview");
+
+// Which console sits beside each tab; the unbilled tabs share the key check.
+const CONSOLE_KIND: Record<ApiTabId, ConsoleKind> = {
+  overview: "check", errors: "check", billing: "check",
+  royalties: "royalties", registry: "registry", splitsheet: "splitsheet", zoe: "zoe",
+};
+
+interface ApiNavItem {
+  key: string; tab: ApiTabId; label: string; anchor?: string;
+  method?: "GET" | "POST" | "{ }"; icon?: React.ElementType;
+}
+const API_NAV: { group: string; items: ApiNavItem[] }[] = [
+  { group: "Start here", items: [
+    { key: "overview", tab: "overview", label: "Overview", icon: Info },
+    { key: "billing", tab: "billing", label: "Billing & limits", icon: Coins },
+  ] },
+  { group: "Endpoints", items: [
+    { key: "ep-royalties", tab: "royalties", label: "/oneclick/v1/royalties", method: "POST" },
+    { key: "ep-registry", tab: "registry", label: "/registry/v1/splits", method: "POST" },
+    { key: "ep-splitsheet", tab: "splitsheet", label: "/splitsheet/v1/documents", method: "POST" },
+    { key: "ep-zoe", tab: "zoe", label: "/zoe/v1/chat/completions", method: "POST" },
+    { key: "ep-models", tab: "overview", anchor: "connect", label: "/zoe/v1/models", method: "GET" },
+  ] },
+  { group: "Schemas", items: [
+    { key: "sch-statement", tab: "royalties", anchor: "the-statement-file", label: "statement", method: "{ }" },
+    { key: "sch-terms", tab: "royalties", anchor: "contract-terms", label: "contract_terms", method: "{ }" },
+    { key: "sch-expenses", tab: "royalties", anchor: "expenses", label: "expenses", method: "{ }" },
+    { key: "sch-payment", tab: "royalties", anchor: "result-event", label: "payment", method: "{ }" },
+    { key: "sch-splits", tab: "registry", anchor: "result-event", label: "splits", method: "{ }" },
+    { key: "sch-contributor", tab: "splitsheet", anchor: "contributors", label: "contributor", method: "{ }" },
+  ] },
+  { group: "Errors", items: [
+    { key: "err-http", tab: "errors", anchor: "http-status-codes", label: "HTTP status codes", icon: AlertTriangle },
+    { key: "err-stream", tab: "errors", anchor: "stream-error-codes", label: "Stream error codes", icon: List },
+  ] },
+];
+// The row that lights up when a tab is reached without clicking one.
+const API_NAV_DEFAULT_KEY: Record<ApiTabId, string> = {
+  overview: "overview", billing: "billing", errors: "err-http",
+  royalties: "ep-royalties", registry: "ep-registry", splitsheet: "ep-splitsheet", zoe: "ep-zoe",
+};
+
+interface ApiTabState { tab: ApiTabId; select: (tab: ApiTabId, anchor?: string) => void; }
+const ApiTabContext = createContext<ApiTabState>({ tab: "overview", select: () => {} });
+
+// Where the console moves into the right rail. Read synchronously so it
+// doesn't jump on first paint; jsdom has no matchMedia, so tests inline it.
+const WIDE_QUERY = "(min-width: 1280px)";
+function useWide() {
+  const [wide, setWide] = useState(() => typeof window !== "undefined" && !!window.matchMedia?.(WIDE_QUERY).matches);
+  useEffect(() => {
+    const mql = window.matchMedia?.(WIDE_QUERY);
+    if (!mql) return;
+    const onChange = () => setWide(mql.matches);
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
+  return wide;
+}
+
+// ---- sidebar folds ----
+
+const navRowCls = (on: boolean) =>
+  `flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13.5px] transition-colors ${on ? "bg-primary/10 font-semibold text-primary" : "font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground"}`;
+
+function NavGroup({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="mb-3.5 last:mb-1">
+      <div className="mb-1.5 ml-2.5 text-[10.5px] font-bold uppercase tracking-[0.1em] text-muted-foreground">{label}</div>
+      <div className="grid gap-px">{children}</div>
+    </div>
+  );
+}
+
+function Fold({ label, icon: Icon, badge, open, onToggle, children }: {
+  label: string; icon: React.ElementType; badge?: string; open: boolean; onToggle: () => void; children: React.ReactNode;
+}) {
+  return (
+    <div className="mb-1">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="mb-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-bold tracking-tight text-foreground transition-colors hover:bg-muted/60"
+      >
+        <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`} />
+        <Icon className="h-[15px] w-[15px] shrink-0 opacity-80" />
+        {label}
+        {badge && (
+          <>
+            {" "}
+            <span className="ml-auto font-mono text-[10.5px] font-semibold text-muted-foreground">{badge}</span>
+          </>
+        )}
+      </button>
+      {open && <div className="mb-3.5 ml-[13px] border-l border-border pl-2.5">{children}</div>}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Heading id helpers — power the "On this page" rail + scroll-spy
@@ -163,8 +290,8 @@ const CALLOUT_STYLES = {
   important: { bar: "border-l-amber-500", bg: "bg-amber-500/5", chip: "bg-amber-500/15 text-amber-500", label: "text-amber-500", icon: AlertTriangle, fallback: "Heads up" },
 } as const;
 
-function Callout({ type = "info", title, children }: {
-  type?: "info" | "tip" | "important"; title?: string; children: React.ReactNode;
+function Callout({ type = "info", title, anchor, children }: {
+  type?: "info" | "tip" | "important"; title?: string; anchor?: string; children: React.ReactNode;
 }) {
   const s = CALLOUT_STYLES[type];
   const IconEl = s.icon;
@@ -174,20 +301,22 @@ function Callout({ type = "info", title, children }: {
         <IconEl className="h-3.5 w-3.5" />
       </div>
       <div className="min-w-0">
-        <div className={`mb-1 text-[11px] font-bold uppercase tracking-wider ${s.label}`}>{title || s.fallback}</div>
+        <div id={anchor} data-doc-heading={anchor} data-doc-level={anchor ? "2" : undefined} className={`mb-1 scroll-mt-28 text-[11px] font-bold uppercase tracking-wider ${s.label}`}>{title || s.fallback}</div>
         <div className="text-sm leading-relaxed text-foreground">{children}</div>
       </div>
     </div>
   );
 }
 
-function PropTable({ rows }: { rows: [string, string, string][] }) {
+function PropTable({ rows, headers = ["Item", "Status", "Description"] }: {
+  rows: [string, string, string][]; headers?: [string, string, string];
+}) {
   return (
     <div className="my-5 overflow-hidden rounded-xl border border-border">
       <table className="w-full border-collapse text-[13.5px]">
         <thead>
           <tr className="bg-muted/50 text-left">
-            {["Item", "Status", "Description"].map((h) => (
+            {headers.map((h) => (
               <th key={h} className="border-b border-border px-3.5 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{h}</th>
             ))}
           </tr>
@@ -207,13 +336,7 @@ function PropTable({ rows }: { rows: [string, string, string][] }) {
 }
 
 function CodeBlock({ label, children }: { label?: string; children: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    navigator.clipboard?.writeText(children).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1400);
-    }).catch(() => {});
-  };
+  const [copied, copy] = useCopied(children);
   return (
     <div className="my-5 overflow-hidden rounded-xl border border-border bg-muted/40">
       <div className="flex items-center gap-2.5 border-b border-border px-3.5 py-2.5">
@@ -889,7 +1012,7 @@ const IntegrationsContent = () => (
       When you mark a work as <strong>Released</strong>, Msanii can pull its ISRC, UPC, release date, and cover art from Spotify automatically. There's nothing to connect — it's built into the Metadata Registry.
     </Callout>
     <Callout type="info" title="What's live today">
-      Google Drive is connected today — import files into a project and export them back to Drive. There's no public API; everything happens inside Msanii.
+      Google Drive is connected today — import files into a project and export them back to Drive. Need to run calculations from your own systems? See the <strong>API</strong> section.
     </Callout>
   </div>
 );
@@ -1203,6 +1326,500 @@ const RoyaltyTrackingContent = () => (
 // Map section id -> content component (module-level, stable reference)
 // ---------------------------------------------------------------------------
 
+
+// ---------------------------------------------------------------------------
+// API — the partner-facing reference. This section is LAYOUT: every fact about
+// the wire format comes from components/docs/partnerApiSamples.ts, which is the
+// source of truth (the trial console renders from it too, so page and console
+// cannot disagree). docs/partner-api-reference.md is the hand-written partner
+// handout of the same facts — update it in the same commit. The Try-it box
+// posts straight to the partner host.
+// ---------------------------------------------------------------------------
+
+function SubHeading({ children }: { children: string }) {
+  const id = slugify(children);
+  return (
+    <h3 id={id} data-doc-heading={id} data-doc-level="3" className="scroll-mt-28 mt-7 mb-2 text-[15px] font-semibold text-foreground">
+      {children}
+    </h3>
+  );
+}
+
+const P = ({ children }: { children: React.ReactNode }) => (
+  <p className="text-sm text-muted-foreground leading-relaxed mb-3">{children}</p>
+);
+
+// ---------------------------------------------------------------------------
+// API reference — tabbed content. Ported from the "API docs — two directions"
+// design (direction A: one docs page, a tab strip, the console in the rail).
+// ---------------------------------------------------------------------------
+
+function ApiTabStrip({ tab, onSelect }: { tab: ApiTabId; onSelect: (tab: ApiTabId) => void }) {
+  return (
+    <div role="tablist" className="no-scrollbar mb-6 mt-5 flex gap-0.5 overflow-x-auto border-b border-border">
+      {API_TABS.map((t) => {
+        const on = t.id === tab;
+        return (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={on}
+            onClick={() => onSelect(t.id)}
+            className={`relative whitespace-nowrap rounded-t-lg px-3.5 py-2.5 text-[13.5px] font-semibold transition-colors ${on ? "text-primary after:absolute after:inset-x-2.5 after:-bottom-px after:h-0.5 after:bg-primary after:content-['']" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"}`}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function EndpointRow({ method, path, description, tag, onClick }: {
+  method: "GET" | "POST"; path: string; description: string; tag: string; onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="grid w-full grid-cols-[auto_1fr_auto] items-center gap-3.5 rounded-[10px] border border-border px-3.5 py-3 text-left transition-colors hover:border-primary/40 hover:bg-muted/50"
+    >
+      <MethodBadge method={method} />
+      <span className="min-w-0">
+        <span className="block font-mono text-[13.5px] text-foreground">{path}</span>
+        <span className="block text-[13.5px] text-muted-foreground">{description}</span>
+      </span>
+      <Tag>{tag}</Tag>
+    </button>
+  );
+}
+
+function EndpointHero({ method, path, title, stats, children }: {
+  method: "GET" | "POST"; path: string; title: string; stats: [string, string][]; children: React.ReactNode;
+}) {
+  const [copied, copy] = useCopied(path);
+  return (
+    <div className="mb-6 rounded-[14px] border border-border bg-gradient-to-b from-muted/60 to-card px-5 pb-4 pt-4">
+      <div className="mb-2 flex flex-wrap items-center gap-3">
+        <MethodBadge method={method} />
+        <span className="font-mono text-[16px] font-medium text-foreground">{path}</span>
+        <button type="button" onClick={copy} className="ml-auto">
+          <Tag>
+            {copied ? <CheckCircle2 className="h-3 w-3 text-primary" /> : <Copy className="h-3 w-3" />}
+            {copied ? "Copied" : "Copy path"}
+          </Tag>
+        </button>
+      </div>
+      <h3 className="mb-2 text-[23px] font-bold tracking-tight text-foreground">{title}</h3>
+      <p className="max-w-[62ch] text-sm leading-relaxed text-muted-foreground">{children}</p>
+      <div className="mt-3.5 flex flex-wrap gap-x-6 gap-y-3 border-t border-border pt-3.5">
+        {stats.map(([k, v]) => (
+          <div key={k}>
+            <div className="mb-0.5 text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">{k}</div>
+            <div className="font-mono text-[13px] text-foreground">{v}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Inputs / Outputs block of an endpoint tab; the name is a rail heading.
+function Sect({ tone, name, sub, tag, children }: {
+  tone: "in" | "out"; name: string; sub: string; tag: string; children: React.ReactNode;
+}) {
+  const id = slugify(name);
+  return (
+    <section className="mb-9 last:mb-0">
+      <div className="mb-5 flex items-center gap-3 border-b border-border pb-3">
+        <span className={`h-3.5 w-3.5 shrink-0 rounded ${tone === "in" ? "bg-primary" : "bg-[hsl(var(--pay-sched-fg))]"}`} />
+        <h2 id={id} data-doc-heading={id} data-doc-level="2" className="scroll-mt-28 text-[17px] font-bold tracking-tight text-foreground">{name}</h2>
+        <span className="text-[13px] text-muted-foreground">{sub}</span>
+        <Tag className="ml-auto">{tag}</Tag>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+const ApiOverviewPanel = () => {
+  const { select } = useContext(ApiTabContext);
+  return (
+    <div>
+      <SectionHeading>Connect</SectionHeading>
+      <P>
+        Every request goes to your base URL over HTTPS and carries your key as a bearer token. <code>GET /zoe/v1/models</code> is the one free route, so it doubles as the key check: it proves the base URL, the key and the network path, and never uses credits — the console on this page runs it. A missing, unknown, revoked or expired key is a <code>401</code> with code <code>invalid_key</code> on every route, as is a team whose API access has been turned off.
+      </P>
+      {PARTNER_API_URL ? <CodeBlock label="Base URL">{PARTNER_API_URL}</CodeBlock> : <P>Your base URL comes from your Msanii contact.</P>}
+      <CodeBlock label="Header">{`Authorization: Bearer mk_live_…`}</CodeBlock>
+      <CodeBlock label={API_SAMPLES.models.title}>{API_SAMPLES.models.code}</CodeBlock>
+      <SectionHeading>Endpoints</SectionHeading>
+      <P>
+        Your own software runs Msanii&apos;s tools over HTTPS: royalty calculations, splits from contracts, split sheets and Zoe. A key is your team&apos;s credential and spends your team&apos;s credits, so it belongs on your servers — never in a browser or a mobile app. Pick an endpoint to read its reference; the console on this page runs each one against your key.
+      </P>
+      <div className="mb-6 grid gap-2">
+        <EndpointRow method="POST" path="/oneclick/v1/royalties" description="Royalty calculation from a statement plus a contract." tag={`${ROYALTIES_PRICE} credits`} onClick={() => select("royalties")} />
+        <EndpointRow method="POST" path="/registry/v1/splits" description="Splits: the deal as data, from contract PDFs." tag={`${REGISTRY_PRICE} credits`} onClick={() => select("registry")} />
+        <EndpointRow method="POST" path="/splitsheet/v1/documents" description="A finished split sheet, PDF or Word." tag={`${SPLIT_SHEET_PRICE} credits`} onClick={() => select("splitsheet")} />
+        <EndpointRow method="POST" path="/zoe/v1/chat/completions" description="Zoe, OpenAI-compatible: point the OpenAI SDK at /zoe/v1." tag={`${ZOE_PRICE} credits`} onClick={() => select("zoe")} />
+        <EndpointRow method="GET" path="/zoe/v1/models" description={'Lists the one model, "zoe" — and doubles as the key check.'} tag="free" onClick={() => select("overview", "connect")} />
+      </div>
+      <Callout type="info" title="Getting access" anchor="getting-access">
+        API access is included with Enterprise plans. A team admin creates keys under <strong>Teams → API keys</strong>. A key is shown once at creation and can&apos;t be recovered — only revoked and replaced — so treat it like a password.
+      </Callout>
+    </div>
+  );
+};
+
+const ApiRoyaltiesPanel = () => (
+  <div>
+    <EndpointHero
+      method="POST"
+      path="/oneclick/v1/royalties"
+      title="Royalty calculation"
+      stats={[
+        ["Price", `${ROYALTIES_PRICE} credits`],
+        ["Request", "multipart/form-data"],
+        ["Response", "text/event-stream"],
+        ["Typical time", "2 s – 2 min"],
+        ["Idempotent", "with header"],
+      ]}
+    >
+      Send a royalty statement and the contract that governs it; get back who is owed what. The contract can be PDF files that Msanii&apos;s AI reads, or structured terms you already hold.
+    </EndpointHero>
+
+    <Sect tone="in" name="Inputs" sub="What you send" tag="multipart/form-data">
+      <P>
+        Send exactly one of <code>contracts</code> (PDFs, read by Msanii&apos;s AI) or <code>contract_terms</code> (structured JSON). Sending both, or neither, is a <code>422</code>.
+      </P>
+      <PropTable
+        headers={["Field", "Type", "Description"]}
+        rows={[
+          ["statement", "file, required", "The royalty statement: .csv, .xlsx or .xls, up to 10 MB."],
+          ["contracts", "file, repeated", "Contract PDFs — up to 10 files, 20 MB in total. Send the field once per file; several PDFs are merged into one set of terms."],
+          ["contract_terms", "JSON string", "The contract, already structured (below). No AI runs, so it always costs the base price."],
+          ["expenses", "JSON string", "Optional recoupable costs, deducted from net-basis shares (below)."],
+          ["Idempotency-Key", "header", "Optional. A retry with the same key and the same inputs in the same billing period is charged once. Recommended on every call."],
+        ]}
+      />
+
+      <SubHeading>The statement file</SubHeading>
+      <P>
+        One row per song earnings line. Msanii finds the two columns it needs by header name, case-insensitively: a <strong>title</strong> column (a header containing title, song, track, release title…) and an <strong>amount payable</strong> column (net payable, net earnings, net revenue, payable to artist…; failing that, payable, amount, earnings, payment or revenue, as long as the header doesn&apos;t say withheld, deduction, fee, commission or advance). Rows with the same title are summed, so one line per month or per platform needs no pre-aggregation.
+      </P>
+      <CodeBlock label="statement.csv — the smallest valid statement">{`Title,Net Payable
+Blue Sky,1000.00
+Red Sun,500.00`}</CodeBlock>
+
+      <SubHeading>Contract terms</SubHeading>
+      <P>
+        <code>contract_terms</code> is the JSON form of a contract: <code>parties</code> (each with a <code>name</code>, a free-text <code>role</code> such as producer or artist, and optional <code>aliases</code>), <code>works</code> (each with a <code>title</code>, matched to statement titles fuzzily — case, punctuation and suffixes such as &ldquo;(Remix)&rdquo; are tolerated) and <code>royalty_shares</code>. An optional <code>default_basis</code> (&ldquo;gross&rdquo; or &ldquo;net&rdquo;) applies to shares that set none. The Splits endpoint returns this exact shape from a PDF, so a contract parsed once can drive every later statement with no AI.
+      </P>
+      <PropTable
+        headers={["royalty_shares[] field", "Type", "Description"]}
+        rows={[
+          ["party_name", "string, required", "Must name one of parties."],
+          ["royalty_type", "string, required", "What income the share is paid from. The calculation covers streaming and master income, so use master or streaming (digital, DSP revenue and similar also count). Publishing, mechanical, sync and performance shares are ignored — they are paid from different statements."],
+          ["percentage", "number, required", "0–100, applied to each matched work."],
+          ["basis", "\"gross\" | \"net\"", "gross pays the percentage of the statement amount; net deducts the work's share of expenses first. Falls back to default_basis, then gross."],
+          ["terms", "string", "The clause, verbatim if you have it. If it names SoundExchange, a PRO or the MLC as the payer, the share is treated as paid outside this statement and skipped."],
+        ]}
+      />
+      <CodeBlock label="contract_terms">{`{
+  "parties": [{"name": "Jane Doe", "role": "producer"}],
+  "works": [{"title": "Blue Sky"}, {"title": "Red Sun"}],
+  "royalty_shares": [
+    {"party_name": "Jane Doe", "royalty_type": "master", "percentage": 50, "basis": "net"}
+  ]
+}`}</CodeBlock>
+      <Callout type="info" title="Lists" anchor="lists">
+        <code>parties</code>, <code>works</code> and <code>royalty_shares</code> are JSON arrays inside <code>contract_terms</code>; <code>expenses</code> is its own array, sent as a separate field. One object per entry, as many as the deal has. Two producers on two songs is two parties, two works and two shares. The console on this page builds them from rows and shows the exact body it sends.
+      </Callout>
+
+      <SubHeading>Expenses</SubHeading>
+      <P>
+        <code>expenses</code> is a list of costs recouped before net-basis shares are paid; gross-basis shares ignore them. Each has an <code>amount</code>, an optional <code>description</code> and optional <code>work_titles</code>. A <strong>project-wide</strong> expense (no titles) is spread across every song in the statement in proportion to its earnings. A <strong>tagged</strong> expense is applied in full to each listed song that appears in the statement; a tag that matches nothing is dropped. A song&apos;s net amount never goes below zero.
+      </P>
+      <CodeBlock label="expenses">{`[{"description": "Mastering", "amount": 300}]`}</CodeBlock>
+
+      <SubHeading>Examples</SubHeading>
+      <P>
+        Python shown; any HTTP client works — a calculation is one multipart POST answered with server-sent events. Ask your Msanii contact for <code>msanii_partner.py</code>, a one-file client with a smoke test that exercises every endpoint against your key.
+      </P>
+      <CodeBlock label={API_SAMPLES.royaltiesPdf.title}>{API_SAMPLES.royaltiesPdf.code}</CodeBlock>
+      <CodeBlock label={API_SAMPLES.royaltiesTerms.title}>{API_SAMPLES.royaltiesTerms.code}</CodeBlock>
+    </Sect>
+
+    <Sect tone="out" name="Outputs" sub="What comes back" tag="text/event-stream">
+      <P>
+        A <code>200</code> stream. While a PDF is being read the server sends a heartbeat line (<code>: ping</code>) every 15 seconds — ignore lines starting with a colon. Exactly one <code>data:</code> event follows, carrying either a result or an error.
+      </P>
+      <SubHeading>Result event</SubHeading>
+      <P>
+        Three sections: the totals, one line per party per matched work, and what the call cost. For the statement and the <code>contract_terms</code> block above, with the 300.00 project-wide expense:
+      </P>
+      <ResponseExample label="data: — result event" sections={ROYALTIES_RESPONSE} />
+
+      <SubHeading>Unmatched titles</SubHeading>
+      <P>
+        Statement rows that match no work in the contract are skipped, not errors — a statement can carry more songs than the contract covers. If none of the contract&apos;s works appear in the statement, the run ends with a <code>NO_SONG_MATCHES</code> error event instead of a result, and nothing is charged.
+      </P>
+    </Sect>
+  </div>
+);
+
+const ApiRegistryPanel = () => (
+  <div>
+    <EndpointHero
+      method="POST"
+      path="/registry/v1/splits"
+      title="Splits"
+      stats={[
+        ["Price", `${REGISTRY_PRICE} credits`],
+        ["Request", "multipart/form-data"],
+        ["Response", "text/event-stream"],
+        ["Typical time", "30 s – 2 min"],
+        ["Idempotent", "with header"],
+      ]}
+    >
+      Send contract PDFs and get the deal back as data: the terms in exactly the shape the royalty calculation accepts, plus each party&apos;s master, publishing and SoundExchange percentages. Nothing is stored.
+    </EndpointHero>
+
+    <Sect tone="in" name="Inputs" sub="What you send" tag="multipart/form-data">
+      <PropTable
+        headers={["Field", "Type", "Description"]}
+        rows={[
+          ["contracts", "file, repeated, required", "Contract PDFs — up to 10 files, 20 MB in total. Send the field once per file; several PDFs are merged into one set of terms."],
+          ["main_artist_name", "string", "Optional. The artist the splits are built around: they are kept even at 0 / 0 and named in splits.main_artist, by the name the contract uses. If the name isn't found, main_artist is null and the artist is left out."],
+          ["Idempotency-Key", "header", "Optional. The same key with the same files and artist in the same billing period is charged once. Recommended."],
+        ]}
+      />
+      <SubHeading>Example</SubHeading>
+      <CodeBlock label={API_SAMPLES.contractTerms.title}>{API_SAMPLES.contractTerms.code}</CodeBlock>
+    </Sect>
+
+    <Sect tone="out" name="Outputs" sub="What comes back" tag="text/event-stream">
+      <P>
+        The same framing as a calculation: heartbeat lines (<code>: ping</code>) while the parse runs, then exactly one <code>data:</code> event — a result or an error.
+      </P>
+      <SubHeading>Result event</SubHeading>
+      <P>
+        Two views of one contract. <code>contract_terms</code> is documented under the royalty calculation&apos;s inputs and can be sent there verbatim — parse a contract once, then run every statement against it at the base price with no AI. <code>splits</code> is the Registry&apos;s ownership view.
+      </P>
+      <ResponseExample label="data: — result event" sections={SPLITS_RESPONSE} />
+      <SubHeading>Unreadable contracts</SubHeading>
+      <P>
+        A scanned image, an encrypted file or an empty PDF ends in an error event with code <code>CONTRACT_UNREADABLE</code>. An error event is never billed.
+      </P>
+    </Sect>
+  </div>
+);
+
+const ApiSplitSheetPanel = () => (
+  <div>
+    <EndpointHero
+      method="POST"
+      path="/splitsheet/v1/documents"
+      title="Split sheet"
+      stats={[
+        ["Price", `${SPLIT_SHEET_PRICE} credits per document`],
+        ["Request", "application/json"],
+        ["Response", "PDF or DOCX file"],
+        ["Typical time", "seconds"],
+        ["Idempotent", "with header"],
+      ]}
+    >
+      The finished split sheet, from the same generator as Msanii&apos;s Split Sheet tool. No AI runs, so a sheet always costs exactly the base price — per document: the PDF and the DOCX of one sheet are two.
+    </EndpointHero>
+
+    <Sect tone="in" name="Inputs" sub="What you send" tag="application/json">
+      <PropTable
+        headers={["Field", "Type", "Description"]}
+        rows={[
+          ["work_title", "string, required", "Printed on the sheet and used for the file name."],
+          ["work_type", "string", "Default single. Printed as given (single, album track…)."],
+          ["split_type", "\"publishing\" | \"master\" | \"both\"", "Which sides the sheet covers. Default both."],
+          ["date", "string, required", "Printed verbatim, so use the wording you want on the sheet."],
+          ["format", "\"pdf\" | \"docx\"", "Default pdf."],
+          ["contributors", "array, required", "1–50 lines, below."],
+          ["Idempotency-Key", "header", "Optional. The same body in the same billing period is charged once."],
+        ]}
+      />
+      <SubHeading>Contributors</SubHeading>
+      <P>
+        One line per person on the sheet. The publishing side is the composition: a self-published writer gives one <code>publishing_share</code>; a published writer sets <code>is_published</code> and splits it into <code>writer_share</code> and <code>publisher_share</code>. The master side is the recording: <code>master_percentage</code>, and optionally the <code>label</code>.
+      </P>
+      <PropTable
+        headers={["Field", "Type", "Description"]}
+        rows={[
+          ["name, role", "string, required", "The person and what they did (Producer, Writer, Artist…)."],
+          ["publishing_share", "number", "Their share of the composition, 0–100, when self-published."],
+          ["writer_share, publisher_share", "number", "Used instead of publishing_share when is_published is true."],
+          ["is_published, publisher_name, publisher_ipi", "", "The contributor's publisher, if they have one."],
+          ["ipi_number", "string", "The writer's IPI / CAE number."],
+          ["master_percentage", "number", "Their share of the sound recording, 0–100."],
+          ["label", "string", "The label on the master side, if any."],
+        ]}
+      />
+      <Callout type="info" title="Lists" anchor="contributor-lists"><code>contributors</code> is a JSON array: one object per person, 1–50 of them. The console on this page builds it from rows.</Callout>
+      <CodeBlock label="request body">{SPLIT_SHEET_SAMPLE}</CodeBlock>
+      <SubHeading>Example</SubHeading>
+      <CodeBlock label={API_SAMPLES.splitSheet.title}>{API_SAMPLES.splitSheet.code}</CodeBlock>
+    </Sect>
+
+    <Sect tone="out" name="Outputs" sub="What comes back" tag="application/pdf · docx">
+      <P>
+        A <code>200</code> whose body is the document itself. Save the body as the file; the headers tell you what it is and what it cost.
+      </P>
+      <PropTable headers={["Header", "Value", "Notes"]} rows={SPLIT_SHEET_HEADERS} />
+      <P>
+        A sheet that could not be rendered is a <code>500</code> with code <code>internal_error</code> and a <code>request_id</code> to quote to support. It is never billed.
+      </P>
+    </Sect>
+  </div>
+);
+
+const ApiZoePanel = () => (
+  <div>
+    <EndpointHero
+      method="POST"
+      path="/zoe/v1/chat/completions"
+      title="Zoe (OpenAI-compatible)"
+      stats={[
+        ["Price", `${ZOE_PRICE} credits per answer`],
+        ["Request", "application/json"],
+        ["Response", "JSON, or an SSE stream"],
+        ["Idempotent", "no"],
+      ]}
+    >
+      Ask Zoe music-business questions from your own software. <code>/zoe/v1</code> speaks the OpenAI chat-completions protocol, so the official OpenAI SDK — or anything built on it — works unchanged.
+    </EndpointHero>
+
+    <SectionHeading>OpenAI compatibility</SectionHeading>
+    <P>
+      Set <code>base_url</code> to your base URL plus <code>/zoe/v1</code>, your key as the API key, and <code>model</code> to <code>zoe</code>. Both plain and streaming (<code>stream: true</code>, ending in <code>data: [DONE]</code>) responses use OpenAI&apos;s shapes, and <code>GET /zoe/v1/models</code> lists the one model for SDKs that probe it.
+    </P>
+    <CodeBlock label={API_SAMPLES.zoe.title}>{API_SAMPLES.zoe.code}</CodeBlock>
+
+    <SectionHeading>Request and response</SectionHeading>
+    <P>
+      Zoe on the API is <strong>stateless</strong>: she keeps no memory between calls and has no access to documents stored in Msanii, so send the whole context — earlier turns, a contract&apos;s text — in <code>messages</code>, exactly as you would with OpenAI. Other OpenAI fields are ignored rather than rejected, so a stock client never fails on them.
+    </P>
+    <PropTable
+      headers={["Field", "Type", "Description"]}
+      rows={[
+        ["model", "string, required", "Must be \"zoe\". Anything else is a 404 model_not_found."],
+        ["messages", "array, required", "Roles system, user and assistant; content as a string or text parts. Up to 100 messages and 100,000 characters in total."],
+        ["stream", "boolean", "false returns one chat.completion; true streams chat.completion.chunk frames, then data: [DONE]."],
+        ["temperature", "number", "0–2, passed through."],
+        ["max_tokens", "integer", "1–4,000; also the default."],
+      ]}
+    />
+    <ResponseExample label="200 — chat.completion" sections={ZOE_RESPONSE} />
+
+    <SectionHeading>What Zoe answers</SectionHeading>
+    <P>
+      Music-business questions — deals, royalties, rights, publishing, management — from general knowledge and from anything you include in the conversation. She politely declines unrelated topics. Every delivered answer is billed; a failed one (<code>502 zoe_failed</code>, or an error frame before <code>[DONE]</code> on a stream) is not.
+    </P>
+  </div>
+);
+
+const ApiErrorsPanel = () => (
+  <div>
+    <SectionHeading>HTTP status codes</SectionHeading>
+    <P>
+      Before any work starts, a failure is a plain HTTP error with a JSON body of the form <code>{'{"detail": {"code": "…"}}'}</code>. Nothing is charged.
+    </P>
+    <PropTable
+      headers={["Status", "code", "Meaning"]}
+      rows={[
+        ["401", "invalid_key", "Missing, unknown, revoked or expired key — or the team's API access has been turned off."],
+        ["402", "insufficient_credits", "The team's balance is below the price of a run; the body also carries price and balance. No work was started."],
+        ["404", "model_not_found", "Zoe only: a model other than \"zoe\" was requested."],
+        ["413", "file_too_large / too_many_contracts", "Statement over 10 MB, contracts over 20 MB in total, or more than 10 files."],
+        ["422", "invalid_request", "Both or neither of contracts / contract_terms, a non-PDF contract, malformed JSON, no contracts on a parse, a split sheet body that fails validation — or, for Zoe, an empty or over-long messages list."],
+        ["500", "internal_error", "A split sheet couldn't be rendered. Quote request_id to support."],
+        ["502", "zoe_failed", "Zoe didn't answer. Retry. On a Zoe stream this arrives as an error frame before [DONE] instead."],
+      ]}
+    />
+
+    <SectionHeading>Stream error codes</SectionHeading>
+    <P>
+      Inside a calculation or splits stream, the failure arrives as an error event — HTTP is already <code>200</code> by then. <code>message</code> and <code>suggestion</code> are safe to show a person; an error event is never billed.
+    </P>
+    <ResponseExample label="data: — error event" sections={ERROR_EVENT_RESPONSE} />
+    <PropTable
+      headers={["code", "details", "Meaning"]}
+      rows={[
+        ["STATEMENT_UNSUPPORTED_FORMAT", "", "Not a CSV or Excel file."],
+        ["STATEMENT_EMPTY", "", "No earnings rows could be read."],
+        ["STATEMENT_COLUMNS_UNDETECTABLE", "available_columns", "The title or amount column could not be identified."],
+        ["NO_WORKS_IN_CONTRACT", "", "The contract lists no songs."],
+        ["NO_ROYALTY_SHARES_IN_CONTRACT", "", "The contract has no percentage splits."],
+        ["NO_STREAMING_EARNABLE_SHARES", "excluded_payor_count", "Splits exist, but none are paid from streaming or master income."],
+        ["NO_SONG_MATCHES", "contract_works, statement_songs", "No contract work appears in the statement."],
+        ["CONTRACT_UNREADABLE", "reason", "Splits only: a scanned image, an encrypted or empty file."],
+        ["internal_error", "request_id", "Something failed on Msanii's side. Quote the request id to support."],
+      ]}
+    />
+  </div>
+);
+
+const ApiBillingPanel = () => (
+  <div>
+    <SectionHeading>How billing works</SectionHeading>
+    <ul className="mb-3 list-disc space-y-1.5 pl-5 text-sm leading-relaxed text-muted-foreground">
+      <li><strong className="text-foreground">Every response says what it cost.</strong> <code>billing.credits</code> in a result event, a Zoe body or the stream&apos;s final stop frame; the <code>Msanii-Credits</code> header on a document. A replay under the same Idempotency-Key reports 0 and <code>replayed: true</code>. No token counts are returned.</li>
+      <li><strong className="text-foreground">You pay only for a result you received.</strong> The charge is applied after the result event, the document, or the last chunk of a Zoe stream is returned. A run that fails before the results arrived, costs nothing.</li>
+      <li><strong className="text-foreground">Each call has a base price</strong> — at the time of writing {ROYALTIES_PRICE} credits per calculation, {REGISTRY_PRICE} per splits run, {SPLIT_SHEET_PRICE} per split sheet and {ZOE_PRICE} per Zoe answer, shown as <code>price</code> in a 402. A calculation or parse over an unusually large set of PDFs, or a very long Zoe exchange, can cost more; a <code>contract_terms</code> run and a split sheet always cost exactly the base.</li>
+      <li><strong className="text-foreground">Send an Idempotency-Key on calculations, parses and sheets.</strong> The same key with the same inputs is charged once per billing period and returns the same result. Without it, every call is billed. Zoe answers have no idempotency: every delivered answer is billed.</li>
+      <li><strong className="text-foreground">The balance is checked first.</strong> A 402 comes back before any work starts, and its body carries the price and the balance. Only a team admin can add credits, from the team page.</li>
+      <li><code>/zoe/v1/models</code> is always free.</li>
+    </ul>
+
+    <SectionHeading>Limits</SectionHeading>
+    <PropTable
+      headers={["Limit", "Value", "Notes"]}
+      rows={[
+        ["Contract files per request", "10", "PDF only."],
+        ["Contracts, total size", "20 MB", ""],
+        ["Statement size", "10 MB", ""],
+        ["Calculation time", "seconds – 2 min", "Structured terms return in seconds; a PDF run typically takes 30–120 s. Keep read timeouts above 60 s — heartbeats keep the connection alive."],
+        ["Splits run time", "30 s – 2 min", "Heartbeats keep the connection alive."],
+        ["Split sheet contributors", "50", "Per document."],
+        ["Zoe messages per call", "100", "100,000 characters in total across them."],
+        ["Zoe max_tokens", "4,000", "Also the default."],
+      ]}
+    />
+
+    <SectionHeading>Versioning</SectionHeading>
+    <P>
+      Everything under <code>/oneclick/v1</code>, <code>/registry/v1</code>, <code>/splitsheet/v1</code> and <code>/zoe/v1</code> is frozen: fields may be added to responses, but existing fields, codes and meanings won&apos;t change. Breaking changes ship as a <code>v2</code>.
+    </P>
+  </div>
+);
+
+const API_PANELS: Record<ApiTabId, React.FC> = {
+  overview: ApiOverviewPanel,
+  royalties: ApiRoyaltiesPanel,
+  registry: ApiRegistryPanel,
+  splitsheet: ApiSplitSheetPanel,
+  zoe: ApiZoePanel,
+  errors: ApiErrorsPanel,
+  billing: ApiBillingPanel,
+};
+
+const ApiContent = () => {
+  const { tab, select } = useContext(ApiTabContext);
+  const Panel = API_PANELS[tab];
+  return (
+    <div>
+      <ApiTabStrip tab={tab} onSelect={(t) => select(t)} />
+      <Panel />
+    </div>
+  );
+};
+
 const SECTION_CONTENT: Record<string, React.FC> = {
   "getting-started": GettingStartedContent,
   portfolio: PortfolioContent,
@@ -1216,6 +1833,7 @@ const SECTION_CONTENT: Record<string, React.FC> = {
   "artist-management": ArtistManagementContent,
   workspace: WorkspaceContent,
   integrations: IntegrationsContent,
+  api: ApiContent,
   credits: CreditsContent,
   "best-practices": BestPracticesContent,
 };
@@ -1287,6 +1905,13 @@ const Documentation = () => {
     return s && SECTION_INDEX.has(s) ? s : "getting-started";
   });
   const [navQuery, setNavQuery] = useState("");
+  // API reference: the tab (deep-linkable as ?tab=), the sidebar row that lit
+  // it, and the console's key — page-level so they survive tab switches.
+  const [apiTab, setApiTab] = useState<ApiTabId>(() => parseApiTab(searchParams.get("tab")));
+  const [apiNavKey, setApiNavKey] = useState<string | null>(null);
+  const [apiKey, setApiKey] = useState("");
+  const [folds, setFolds] = useState({ platform: true, api: true });
+  const wide = useWide();
 
   // Keep the active section in sync if the ?section= param changes while the
   // page is already mounted (e.g. a footer link clicked from elsewhere).
@@ -1294,6 +1919,10 @@ const Documentation = () => {
     const s = searchParams.get("section");
     if (s && SECTION_INDEX.has(s)) {
       setActiveSection(s);
+      if (s === "api") {
+        setApiTab(parseApiTab(searchParams.get("tab")));
+        setApiNavKey(null);
+      }
       window.scrollTo({ top: 0 });
     }
   }, [searchParams]);
@@ -1306,6 +1935,20 @@ const Documentation = () => {
     setActiveSection(id);
     window.scrollTo({ top: 0 });
   }, []);
+
+  const selectApiTab = useCallback((tab: ApiTabId, anchor?: string, navKey?: string) => {
+    setActiveSection("api");
+    setApiTab(tab);
+    setApiNavKey(navKey ?? null);
+    if (anchor) {
+      // The panel renders on this commit; the anchor exists by the next frame.
+      requestAnimationFrame(() => document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    } else {
+      window.scrollTo({ top: 0 });
+    }
+  }, []);
+  const apiTabState = useMemo<ApiTabState>(() => ({ tab: apiTab, select: selectApiTab }), [apiTab, selectApiTab]);
+  const isApi = activeSection === "api";
 
   const currentIndex = useMemo(() => SECTION_INDEX.get(activeSection) ?? 0, [activeSection]);
   const prevSection = currentIndex > 0 ? SECTIONS[currentIndex - 1] : null;
@@ -1323,7 +1966,7 @@ const Documentation = () => {
       .map((n) => ({ id: n.id, label: (n.textContent || "").trim(), level: Number(n.getAttribute("data-doc-level") || "2") }));
     setHeadings(hs);
     setActiveHeading(hs[0]?.id || "");
-  }, [activeSection]);
+  }, [activeSection, apiTab]);
 
   // Scroll-spy: highlight the heading currently in view.
   useEffect(() => {
@@ -1344,16 +1987,27 @@ const Documentation = () => {
     return () => obs.disconnect();
   }, [headings]);
 
-  // Sidebar groups filtered by the search box.
-  const filteredGroups = useMemo(() => {
-    const q = navQuery.trim().toLowerCase();
-    return NAV_GROUPS
-      .map((g) => ({
-        group: g.group,
-        items: SECTIONS.filter((s) => s.group === g.group && (!q || s.label.toLowerCase().includes(q))),
-      }))
-      .filter((g) => g.items.length > 0);
-  }, [navQuery]);
+  // Sidebar folds filtered by the search box.
+  const q = navQuery.trim().toLowerCase();
+  const platformGroups = useMemo(
+    () =>
+      PLATFORM_GROUPS
+        .map((g) => ({
+          group: g.group,
+          items: SECTIONS.filter((s) => s.group === g.group && (!q || s.label.toLowerCase().includes(q))),
+        }))
+        .filter((g) => g.items.length > 0),
+    [q]
+  );
+  const apiGroups = useMemo(
+    () =>
+      API_NAV
+        .map((g) => ({ group: g.group, items: g.items.filter((i) => !q || "api".includes(q) || i.label.toLowerCase().includes(q)) }))
+        .filter((g) => g.items.length > 0),
+    [q]
+  );
+
+  const apiConsole = <PartnerApiConsole kind={CONSOLE_KIND[apiTab]} apiKey={apiKey} onApiKeyChange={setApiKey} />;
 
   return (
     <div className="min-h-screen bg-background">
@@ -1435,9 +2089,9 @@ const Documentation = () => {
       </div>
 
       {/* 3-column docs layout */}
-      <div className="mx-auto grid w-full max-w-[1340px] grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[260px_minmax(0,1fr)_240px]">
+      <div className={`mx-auto grid w-full max-w-[1360px] grid-cols-1 lg:grid-cols-[284px_minmax(0,1fr)] ${isApi ? "xl:grid-cols-[284px_minmax(0,1fr)_372px]" : "xl:grid-cols-[284px_minmax(0,1fr)_240px]"}`}>
         {/* Sidebar */}
-        <nav className="hidden lg:block sticky top-[57px] h-[calc(100vh-57px)] overflow-y-auto border-r border-border px-5 py-7">
+        <nav className="hidden lg:block sticky top-[57px] h-[calc(100vh-57px)] overflow-y-auto border-r border-border px-3.5 py-5">
           <div className="mb-6 flex items-center gap-2 rounded-lg border border-border bg-muted/50 px-3 py-2">
             <Search className="h-3.5 w-3.5 text-muted-foreground" />
             <input
@@ -1447,27 +2101,57 @@ const Documentation = () => {
               className="w-full bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
             />
           </div>
-          {filteredGroups.map((g) => (
-            <div key={g.group} className="mb-6">
-              <div className="mb-2.5 px-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">{g.group}</div>
-              <div className="grid gap-0.5">
-                {g.items.map((s) => {
-                  const Icon = s.icon;
-                  const on = activeSection === s.id;
-                  return (
-                    <button
-                      key={s.id}
-                      onClick={() => handleSelectSection(s.id)}
-                      className={`flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-sm transition-colors ${on ? "bg-primary/10 font-semibold text-primary" : "font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground"}`}
-                    >
-                      <Icon className={`h-4 w-4 shrink-0 ${on ? "" : "opacity-75"}`} /> {s.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-          {filteredGroups.length === 0 && <div className="px-3 text-sm text-muted-foreground">No matches.</div>}
+          {platformGroups.length > 0 && (
+            <Fold label="Platform" icon={LayoutGrid} open={folds.platform} onToggle={() => setFolds((f) => ({ ...f, platform: !f.platform }))}>
+              {platformGroups.map((g) => (
+                <NavGroup key={g.group} label={g.group}>
+                  {g.items.map((s) => {
+                    const Icon = s.icon;
+                    const on = activeSection === s.id;
+                    return (
+                      <button key={s.id} onClick={() => handleSelectSection(s.id)} className={navRowCls(on)}>
+                        <Icon className={`h-[15px] w-[15px] shrink-0 ${on ? "" : "opacity-75"}`} /> {s.label}
+                      </button>
+                    );
+                  })}
+                </NavGroup>
+              ))}
+            </Fold>
+          )}
+          {apiGroups.length > 0 && (
+            <Fold label="API" icon={KeyRound} badge="v1" open={folds.api} onToggle={() => setFolds((f) => ({ ...f, api: !f.api }))}>
+              {apiGroups.map((g) => (
+                <NavGroup key={g.group} label={g.group}>
+                  {g.items.map((item) => {
+                    const on = isApi && (apiNavKey ?? API_NAV_DEFAULT_KEY[apiTab]) === item.key;
+                    const Icon = item.icon;
+                    const methodCls = on
+                      ? "text-primary"
+                      : item.method === "POST"
+                        ? "text-[hsl(var(--pay-sched-fg))]"
+                        : item.method === "GET"
+                          ? "text-primary"
+                          : "text-muted-foreground";
+                    return (
+                      <button key={item.key} onClick={() => selectApiTab(item.tab, item.anchor, item.key)} className={navRowCls(on)}>
+                        {item.method ? (
+                          <>
+                            <span className={`w-[34px] shrink-0 text-right font-mono text-[9.5px] font-semibold ${methodCls}`}>{item.method}</span>
+                            <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{item.label}</span>
+                          </>
+                        ) : (
+                          <>
+                            {Icon && <Icon className={`h-[15px] w-[15px] shrink-0 ${on ? "" : "opacity-75"}`} />} {item.label}
+                          </>
+                        )}
+                      </button>
+                    );
+                  })}
+                </NavGroup>
+              ))}
+            </Fold>
+          )}
+          {platformGroups.length === 0 && apiGroups.length === 0 && <div className="px-3 text-sm text-muted-foreground">No matches.</div>}
           <div className="mt-2 border-t border-border px-3 pt-4">
             <button onClick={() => navigate("/tools/zoe")} className="text-[13px] text-muted-foreground transition-colors hover:text-foreground">
               Can't find it? Ask Zoe →
@@ -1491,9 +2175,12 @@ const Documentation = () => {
 
             <div className="mt-8">
               <SelectSectionContext.Provider value={handleSelectSection}>
-                <ActiveContent />
+                <ApiTabContext.Provider value={apiTabState}>
+                  <ActiveContent />
+                </ApiTabContext.Provider>
               </SelectSectionContext.Provider>
             </div>
+            {isApi && !wide && <div className="mt-8">{apiConsole}</div>}
 
             <PageNav prev={prevSection} next={nextSection} onSelect={handleSelectSection} />
             <Helpful />
@@ -1501,10 +2188,13 @@ const Documentation = () => {
         </main>
 
         {/* On this page */}
-        <aside className="hidden xl:block sticky top-[57px] h-[calc(100vh-57px)] overflow-y-auto px-6 py-10">
+        <aside className={`hidden xl:block sticky top-[57px] h-[calc(100vh-57px)] overflow-y-auto ${isApi ? "border-l border-border px-5 py-6" : "px-6 py-10"}`}>
+          {isApi && wide && apiConsole}
           {headings.length > 0 && (
             <>
-              <div className="mb-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">On this page</div>
+              <div className={`mb-3 text-[11px] font-bold uppercase tracking-wider text-muted-foreground ${isApi ? "mt-6" : ""}`}>
+                {isApi ? "On this tab" : "On this page"}
+              </div>
               <div className="grid gap-1 border-l border-border">
                 {headings.map((h) => {
                   const on = activeHeading === h.id;

@@ -258,7 +258,7 @@ interface SheetProps {
 
 function UserDetailSheet({ userId, onClose, onOpenOrg }: SheetProps) {
   const detailQuery = useEntitlementsForUser(userId);
-  const { grantPro, revokePro, clearOverride, promoteAdmin, demoteAdmin, recalcStorage } =
+  const { grantTier, revokePro, clearOverride, promoteAdmin, demoteAdmin, recalcStorage } =
     useAdminMutations();
   const grantsQuery = useTesterGrants();
   const createGrant = useCreateTesterGrant();
@@ -329,20 +329,26 @@ function UserDetailSheet({ userId, onClose, onOpenOrg }: SheetProps) {
                     <Badge variant={isPaidTier(data.entitlements.tier) ? "default" : "outline"}>
                       {tierLabel(data.entitlements.tier)}
                     </Badge>
-                    {!isPaidTier(data.entitlements.tier) ? (
+                    {/* One button per paid tier the user is NOT on, plus revoke when paid. */}
+                    {(["basic", "pro"] as const)
+                      .filter((t) => t !== data.entitlements.tier)
+                      .map((t) => (
+                        <Button
+                          key={t}
+                          size="sm"
+                          variant={isPaidTier(data.entitlements.tier) ? "outline" : "default"}
+                          disabled={grantTier.isPending}
+                          onClick={() =>
+                            run(() => grantTier.mutateAsync({ userId: userId!, tier: t }), `Granted ${tierLabel(t)}`)
+                          }
+                        >
+                          {isPaidTier(data.entitlements.tier) ? `Switch to ${tierLabel(t)}` : `Grant ${tierLabel(t)}`}
+                        </Button>
+                      ))}
+                    {isPaidTier(data.entitlements.tier) && (
                       <Button
                         size="sm"
-                        disabled={grantPro.isPending}
-                        onClick={() =>
-                          run(() => grantPro.mutateAsync(userId!), `Granted ${tierLabel("basic")}`)
-                        }
-                      >
-                        Grant {tierLabel("basic")}
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
+                        variant="ghost"
                         disabled={revokePro.isPending}
                         onClick={() =>
                           run(
@@ -351,12 +357,13 @@ function UserDetailSheet({ userId, onClose, onOpenOrg }: SheetProps) {
                           )
                         }
                       >
-                        Revoke {tierLabel(data.entitlements.tier)}
+                        Revoke
                       </Button>
                     )}
                   </div>
-                  {/* The /grant endpoint always sets tier="basic" — there is no
-                      pro-grant path to expose here without a backend change. */}
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    A manual grant is not a Stripe subscription — it stays until revoked here.
+                  </p>
                 </section>
 
                 <section>

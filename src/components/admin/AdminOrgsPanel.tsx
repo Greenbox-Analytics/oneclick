@@ -9,14 +9,19 @@ import { ChevronRight, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   useAdminOrgs,
   useAdminOrgPool,
   useAdminOrgMutations,
+  useAdminOrgUsage,
+  useAdminPartnerKeys,
   type AdminOrgRow,
 } from "@/hooks/useAdminOrgs";
+import { OrgUsageAnalysis } from "@/components/orgs/OrgUsageAnalysis";
+import { keyStatus } from "@/lib/partnerKeys";
 import { KeyValue, ORG_STATUS_TONE, SectionLabel, shortDate, Tag } from "@/components/admin/ui";
 
 export function AdminOrgsPanel({
@@ -124,7 +129,7 @@ export function AdminOrgsPanel({
 
 function OrgDetailSheet({ org, onClose }: { org: AdminOrgRow | null; onClose: () => void }) {
   const poolQuery = useAdminOrgPool(org?.id ?? null);
-  const { grantCredits, setDispersal, setStatus } = useAdminOrgMutations();
+  const { grantCredits, setDispersal, setStatus, setPartnerApi } = useAdminOrgMutations();
 
   const [giftAmount, setGiftAmount] = useState("");
   const [giftReason, setGiftReason] = useState("");
@@ -232,12 +237,14 @@ function OrgDetailSheet({ org, onClose }: { org: AdminOrgRow | null; onClose: ()
             {org.memberCount} member{org.memberCount === 1 ? "" : "s"}
           </Tag>
           {org.archivedAt && <Tag tone="bad">Archived {shortDate(org.archivedAt)}</Tag>}
+          {org.partnerApiEnabled && <Tag tone="ok">Partner API</Tag>}
         </div>
 
         <Tabs value={tab} onValueChange={setTab} className="mt-4">
           <TabsList className="w-full justify-start">
             <TabsTrigger value="license">License</TabsTrigger>
             <TabsTrigger value="credits">Credits</TabsTrigger>
+            <TabsTrigger value="usage">Usage</TabsTrigger>
           </TabsList>
 
           <TabsContent value="license" className="space-y-6 pt-4">
@@ -298,6 +305,30 @@ function OrgDetailSheet({ org, onClose }: { org: AdminOrgRow | null; onClose: ()
                   ? "A pending org has never been activated — there is nothing to suspend yet."
                   : "Suspending blocks the org's members from spending the pool. Credits are left untouched."}
               </p>
+            </section>
+            <section>
+              <SectionLabel>Partner API</SectionLabel>
+              <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
+                <p className="text-xs text-muted-foreground">
+                  Lets this org&apos;s admins issue API keys and run calculations against its pool.
+                  On by default for enterprise orgs; a self-serve team needs it flipped here.
+                  Turning it off makes every one of their keys stop working immediately.
+                </p>
+                <Switch
+                  aria-label="Partner API enabled"
+                  checked={org.partnerApiEnabled}
+                  disabled={setPartnerApi.isPending}
+                  onCheckedChange={(enabled) =>
+                    setPartnerApi.mutate(
+                      { orgId: org.id, enabled },
+                      {
+                        onSuccess: () => toast.success(enabled ? "Partner API enabled." : "Partner API disabled."),
+                        onError: (e) => toast.error(e instanceof Error ? e.message : "Change failed."),
+                      },
+                    )
+                  }
+                />
+              </div>
             </section>
           </TabsContent>
 
@@ -403,8 +434,66 @@ function OrgDetailSheet({ org, onClose }: { org: AdminOrgRow | null; onClose: ()
               </section>
             )}
           </TabsContent>
+
+          <TabsContent value="usage" className="space-y-6 pt-4">
+            {/* The org's own Usage card, read-only, against the /admin routes. */}
+            <OrgUsageAnalysis
+              orgId={org.id}
+              partnerApiEnabled={org.partnerApiEnabled}
+              useUsage={useAdminOrgUsage}
+              useKeys={useAdminPartnerKeys}
+              reportPath={`/admin/orgs/${org.id}/usage/report.pdf`}
+            />
+            {org.partnerApiEnabled && <AdminOrgKeys orgId={org.id} />}
+          </TabsContent>
         </Tabs>
       </SheetContent>
     </Sheet>
+  );
+}
+
+/** Read-only: minting and revoking stay in the org's own console. */
+function AdminOrgKeys({ orgId }: { orgId: string }) {
+  const { data, isLoading, isError } = useAdminPartnerKeys(orgId);
+  const folderName = new Map((data?.folders ?? []).map((f) => [f.id, f.name]));
+  const keys = data?.keys ?? [];
+
+  return (
+    <section>
+      <SectionLabel>API keys</SectionLabel>
+      {isLoading && <p className="text-xs text-muted-foreground">Loading keys…</p>}
+      {isError && <p className="text-xs text-destructive">Couldn&apos;t load API keys.</p>}
+      {!isLoading && !isError && keys.length === 0 && (
+        <p className="text-xs text-muted-foreground">No API keys yet.</p>
+      )}
+      {keys.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="border-b border-border text-left text-[10.5px] uppercase tracking-wider text-muted-foreground">
+                <th className="py-2 pr-3 font-semibold">Name</th>
+                <th className="py-2 pr-3 font-semibold">Folder</th>
+                <th className="py-2 pr-3 font-semibold">Status</th>
+                <th className="py-2 pr-3 font-semibold">Created by</th>
+                <th className="py-2 font-semibold">Last used</th>
+              </tr>
+            </thead>
+            <tbody>
+              {keys.map((k) => (
+                <tr key={k.id} className="border-b border-border/60 last:border-b-0">
+                  <td className="py-2 pr-3 font-medium">{k.label}</td>
+                  <td className="py-2 pr-3 text-muted-foreground">
+                    {(k.folder_id && folderName.get(k.folder_id)) || "—"}
+                  </td>
+                  <td className="py-2 pr-3 capitalize text-muted-foreground">{keyStatus(k)}</td>
+                  <td className="py-2 pr-3 text-muted-foreground">{k.created_by_label ?? "—"}</td>
+                  <td className="py-2 text-muted-foreground">{shortDate(k.last_used_at) || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }

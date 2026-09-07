@@ -4,12 +4,17 @@
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import type { AdminLedgerEntry } from "@/hooks/useAdmin";
+import type { OrgUsage, UsageRange } from "@/hooks/useOrgs";
+import type { PartnerKeysPayload } from "@/hooks/usePartnerKeys";
 
 export interface AdminOrgRow {
   id: string;
   name: string | null;
   status: string;
   archivedAt: string | null;
+  kind?: "self_serve" | "enterprise" | null;
+  /** On by default for enterprise orgs. */
+  partnerApiEnabled: boolean;
   memberCount: number;
   bundleBalance: number;
   reserveBalance: number;
@@ -88,5 +93,34 @@ export function useAdminOrgMutations() {
     onSuccess: invalidate,
   });
 
-  return { grantCredits, setDispersal, setStatus };
+  const setPartnerApi = useMutation({
+    mutationFn: (args: { orgId: string; enabled: boolean }) =>
+      apiFetch<{ org_id: string; partner_api_enabled: boolean }>(
+        `${API_URL}/admin/orgs/${args.orgId}/partner-api`,
+        { method: "PUT", body: JSON.stringify({ enabled: args.enabled }) },
+      ),
+    onSuccess: invalidate,
+  });
+
+  return { grantCredits, setDispersal, setStatus, setPartnerApi };
+}
+
+// Read-only mirrors of the org-side endpoints for the Organizations drawer:
+// same payloads on admin routes, so OrgUsageAnalysis can take these instead.
+export function useAdminOrgUsage(orgId?: string, range: UsageRange = "mtd"): UseQueryResult<OrgUsage> {
+  return useQuery({
+    queryKey: ["admin", "orgs", orgId, "usage", range],
+    queryFn: () => apiFetch<OrgUsage>(`${API_URL}/admin/orgs/${orgId}/usage?range=${range}`),
+    enabled: !!orgId,
+    staleTime: 15_000,
+  });
+}
+
+export function useAdminPartnerKeys(orgId?: string): UseQueryResult<PartnerKeysPayload> {
+  return useQuery({
+    queryKey: ["admin", "orgs", orgId, "partner-keys"],
+    queryFn: () => apiFetch<PartnerKeysPayload>(`${API_URL}/admin/orgs/${orgId}/partner-keys`),
+    enabled: !!orgId,
+    staleTime: 15_000,
+  });
 }

@@ -132,10 +132,11 @@ export function useAdminMutations() {
     qc.invalidateQueries({ queryKey: ["entitlements", userId] });
   };
 
-  const grantPro = useMutation({
-    mutationFn: async (userId: string) =>
-      apiFetch(`${API_URL}/admin/users/${userId}/grant`, { method: "POST" }),
-    onSuccess: (_data, userId) => invalidateUser(userId),
+  // Manual paid-tier grant, no Stripe. Revoke drops to free.
+  const grantTier = useMutation({
+    mutationFn: async ({ userId, tier }: { userId: string; tier: "basic" | "pro" }) =>
+      apiFetch(`${API_URL}/admin/users/${userId}/grant`, { method: "POST", body: JSON.stringify({ tier }) }),
+    onSuccess: (_data, { userId }) => invalidateUser(userId),
   });
 
   const revokePro = useMutation({
@@ -181,7 +182,7 @@ export function useAdminMutations() {
     onSuccess: (_data, userId) => invalidateUser(userId),
   });
 
-  return { grantPro, revokePro, applyOverride, clearOverride, promoteAdmin, demoteAdmin, recalcStorage };
+  return { grantTier, revokePro, applyOverride, clearOverride, promoteAdmin, demoteAdmin, recalcStorage };
 }
 
 // ---------------------------------------------------------------------------

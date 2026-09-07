@@ -16,7 +16,10 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from auth import get_current_user_email, get_current_user_id
+from orgs import service as orgs_service
 from orgs.models import OrgDispersalUpdate
+from partner_api import service as psvc
+from partner_api.models import PartnerKeyCreate
 from subscriptions.admin_auth import is_env_admin, is_user_admin, require_admin
 from subscriptions.admin_service import AdminService
 from subscriptions.models import OverridePayload
@@ -71,6 +74,16 @@ class SetOrgKindRequest(BaseModel):
 
     kind: Literal["self_serve", "enterprise"]
     covered_by_user_id: str | None = None
+
+
+class PartnerApiToggle(BaseModel):
+    enabled: bool
+
+
+class TierGrant(BaseModel):
+    # Defaults to the entry tier, so a bodiless POST from an older client
+    # still means "grant Basic".
+    tier: Literal["basic", "pro"] = "basic"
 
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -131,13 +144,14 @@ async def get_user_detail(
 
 
 @router.post("/users/{user_id}/grant")
-async def grant_pro(
+async def grant_tier(
     user_id: str,
+    body: TierGrant | None = None,
     _admin: str = Depends(require_admin),
 ) -> dict:
+    """Manual paid-tier grant (no Stripe). Basic or Pro; revoke drops to free."""
     try:
-        # Admin grants the ENTRY paid tier (keyed 'basic', labeled "Basic").
-        _get_admin_service().set_tier(user_id, "basic")
+        _get_admin_service().set_tier(user_id, body.tier if body else "basic")
     except Exception as e:
         msg = str(e).lower()
         if "foreign key" in msg or "violates" in msg:
@@ -484,7 +498,6 @@ async def set_org_dispersal(
     dispersal credits, which is what keeps its once-per-month idempotency honest.
     """
     from main import get_supabase_client
-    from orgs import service as orgs_service
 
     sb = get_supabase_client()
     org = sb.table("organizations").select("id").eq("id", org_id).maybe_single().execute()
@@ -494,6 +507,108 @@ async def set_org_dispersal(
         return await orgs_service.set_org_dispersal(sb, org_id, body.monthly_dispersal_credits)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+def _require_org(sb, org_id: str) -> None:
+    org = sb.table("organizations").select("id").eq("id", org_id).maybe_single().execute()
+    if not (org and org.data):
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+
+@router.put("/orgs/{org_id}/partner-api")
+async def set_org_partner_api(
+    org_id: str,
+    body: PartnerApiToggle,
+    _admin: str = Depends(require_admin),
+) -> dict:
+    """Grant/revoke the partner API surface. MSANII ADMIN ONLY, same reasoning
+    as dispersal: anyone can create an org and is auto-made its admin, so a
+    customer-writable dial would hand the surface to everyone."""
+    from main import get_supabase_client
+
+    sb = get_supabase_client()
+    _require_org(sb, org_id)
+    sb.table("organizations").update({"partner_api_enabled": body.enabled}).eq("id", org_id).execute()
+    return {"org_id": org_id, "partner_api_enabled": body.enabled}
+
+
+# Key lifecycle. Msanii-admin for the same reason as the toggle: a key spends
+# the org pool. On the PRODUCT backend on purpose — not partner-flag-gated, so
+# an operator can prepare keys before the partner service is even deployed.
+
+
+@router.post("/orgs/{org_id}/partner-keys")
+async def create_partner_key(
+    org_id: str,
+    body: PartnerKeyCreate,
+    _admin: str = Depends(require_admin),
+    admin_id: str = Depends(get_current_user_id),
+) -> dict:
+    """Mint a key — same body as the org console. The response carries the
+    plaintext secret EXACTLY ONCE."""
+    from main import get_supabase_client
+
+    sb = get_supabase_client()
+    _require_org(sb, org_id)
+    try:
+        return psvc.mint_key(
+            sb,
+            org_id,
+            label=body.label,
+            created_by=admin_id,
+            expires_at=body.expires_at.isoformat() if body.expires_at else None,
+            folder_id=body.folder_id,
+        )
+    except ValueError:
+        raise HTTPException(status_code=422, detail={"code": "unknown_folder"})
+
+
+@router.get("/orgs/{org_id}/partner-keys")
+async def list_partner_keys(org_id: str, _admin: str = Depends(require_admin)) -> dict:
+    """The same {"keys", "folders"} payload the org's own console reads."""
+    from main import get_supabase_client
+
+    return psvc.key_console(get_supabase_client(), org_id)
+
+
+@router.get("/orgs/{org_id}/usage")
+async def get_admin_org_usage(
+    org_id: str,
+    range: orgs_service.UsageRange,
+    _admin: str = Depends(require_admin),
+) -> dict:
+    """Any org's usage payload, same shape as GET /orgs/{id}/usage. Calls the
+    rollup directly: a Msanii admin holds no seat, so it cannot pass the org's
+    own admin check."""
+    from main import get_supabase_client
+
+    return await orgs_service.org_usage_rollup(get_supabase_client(), org_id, range_=range)
+
+
+@router.get("/orgs/{org_id}/usage/report.pdf")
+async def get_admin_org_usage_report(
+    org_id: str,
+    range: orgs_service.UsageRange,
+    _admin: str = Depends(require_admin),
+):
+    """The same payload as GET /admin/orgs/{id}/usage, as a downloadable PDF."""
+    from main import get_supabase_client
+    from orgs import usage_report
+
+    db = get_supabase_client()
+    data = await orgs_service.org_usage_rollup(db, org_id, range_=range)
+    name = (db.table("organizations").select("name").eq("id", org_id).execute().data or [{}])[0].get("name") or "Team"
+    return usage_report.pdf_response(usage_report.render_org_report(name, data), name, range)
+
+
+@router.delete("/orgs/{org_id}/partner-keys/{key_id}")
+async def revoke_partner_key(org_id: str, key_id: str, _admin: str = Depends(require_admin)) -> dict:
+    """404 when the id is not one of this org's keys."""
+    from main import get_supabase_client
+
+    if not psvc.revoke_key(get_supabase_client(), org_id, key_id):
+        raise HTTPException(status_code=404, detail="Key not found")
+    return {"status": "revoked"}
 
 
 @router.post("/orgs/{org_id}/suspend")

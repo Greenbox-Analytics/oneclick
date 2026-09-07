@@ -79,9 +79,9 @@ export function HeaderContextSwitcher() {
               <Building2 className="w-4 h-4 text-muted-foreground" />
               <span className="flex-1 min-w-0">
                 <span className="block truncate">{o.orgName}</span>
-                {o.pending && (
-                  <span className="block text-[11px] text-muted-foreground">Activating soon</span>
-                )}
+                <span className="block text-[11px] text-muted-foreground">
+                  {o.pending ? "Activating soon" : o.kind === "self_serve" ? "Team" : "Enterprise organization"}
+                </span>
               </span>
               {value === o.orgId && <Check className="w-3.5 h-3.5 text-primary flex-none" />}
             </DropdownMenuItem>

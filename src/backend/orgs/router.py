@@ -18,7 +18,7 @@ from analytics import capture as analytics_capture
 from auth import get_current_user_email, get_current_user_id
 from orgs import artists as org_artists
 from orgs import projects as org_projects
-from orgs import service
+from orgs import service, usage_report
 from orgs.models import (
     CreditRequestApprove,
     CreditRequestCreate,
@@ -432,12 +432,33 @@ async def release_coverage(org_id: str, user_id: str = Depends(get_current_user_
 
 
 @router.get("/{org_id}/usage")
-async def get_org_usage(org_id: str, user_id: str = Depends(get_current_user_id)):
+async def get_org_usage(
+    org_id: str,
+    range: service.UsageRange,
+    user_id: str = Depends(get_current_user_id),
+):
     """Admin-only per-member usage rollup — pool balance, cumulative paid-in,
-    and every member's cap / spend-against-cap / storage-vs-cap. Authz denial
-    (403) is raised directly from orgs.authz.require_admin inside the
-    service, same as every other admin-gated endpoint in this router."""
-    return await service.get_org_usage(_get_supabase(), user_id, org_id)
+    every member's cap / spend-against-cap, per-key spend, and the analysis
+    fields (byAction, series, previous) over `range` (mtd | 7d | 14d | 1y |
+    all; spec 2026-09-06 §6). Authz denial (403) is raised directly from
+    orgs.authz.require_admin inside the service, same as every other
+    admin-gated endpoint in this router."""
+    return await service.get_org_usage(_get_supabase(), user_id, org_id, range_=range)
+
+
+@router.get("/{org_id}/usage/report.pdf")
+async def get_org_usage_report(
+    org_id: str,
+    range: service.UsageRange,
+    user_id: str = Depends(get_current_user_id),
+):
+    """The same admin-only payload as GET /orgs/{id}/usage, rendered as a
+    downloadable PDF. Goes through service.get_org_usage so the org-admin gate
+    is the one already there — never re-implemented here."""
+    db = _get_supabase()
+    data = await service.get_org_usage(db, user_id, org_id, range_=range)
+    name = (db.table("organizations").select("name").eq("id", org_id).execute().data or [{}])[0].get("name") or "Team"
+    return usage_report.pdf_response(usage_report.render_org_report(name, data), name, range)
 
 
 @router.get("/{org_id}/ledger")

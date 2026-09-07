@@ -14,7 +14,8 @@ from dateutil.relativedelta import relativedelta
 from supabase import Client
 
 import artist_access
-from subscriptions.ai_pricing import credits_for_excess, tail_free_tokens
+from pagination import fetch_all
+from subscriptions.ai_pricing import compute_charge
 from subscriptions.models import (
     Action,
     Caps,
@@ -1561,34 +1562,9 @@ class EntitlementsService:
             return
         measured = credits_for_llm_usage()
         usage = llm_usage_snapshot() or {}
-        # THREE terms, and the max() of all three is the charge (2026-08-27):
-        #
-        #   grant.price          the BASE — published price of the deliverable,
-        #                        and a hard floor. Never charge below it.
-        #   measured             what the run actually cost, in credits. Keeps
-        #                        the original guarantee that we never sell a run
-        #                        below COGS, whatever the allowance is set to.
-        #   base + size tail     the SIZE term: a run gets ~10 pages of tokens
-        #                        included, and pays for what it burns past that
-        #                        (see ai_pricing.TAIL_FREE_TOKENS).
-        #
-        # The size term is what makes a 60-page contract cost more than a 3-page
-        # one. The old two-term rule couldn't: its threshold was implied by the
-        # base (30 credits => $0.20 of COGS), which sat ~13x above the largest
-        # run ever measured, so size was invisible in practice.
-        #
-        # `measured` stays in the max() as a belt: it makes any allowance value
-        # SAFE by construction. Set an allowance too generously and the charge
-        # falls back to real cost rather than dipping below it — so mis-tuning
-        # this dial can cost margin, never money.
-        tail = 0
-        if measured is not None:
-            tail = credits_for_excess(
-                usage.get("cost_usd", 0.0),
-                (usage.get("input_tokens", 0) or 0) + (usage.get("output_tokens", 0) or 0),
-                tail_free_tokens(grant.action),
-            )
-        amount = grant.price if measured is None else max(grant.price, measured, grant.price + tail)
+        # THE formula lives in ai_pricing.compute_charge — shared with the
+        # partner API. Do not grow a local max() here.
+        amount, metadata = compute_charge(grant.action, grant.price, measured, usage)
         if amount <= 0:
             return
         try:
@@ -1610,36 +1586,8 @@ class EntitlementsService:
             # The token counts and real cost behind this charge ride on the
             # ledger row: with a metered price, "why 9 credits?" is otherwise
             # unanswerable from the ledger alone. `estimated` records what the
-            # gate reserved, so over/under-runs are measurable.
-            # `metered` answers "was this charge cost-driven?", NOT "was cost
-            # readable?". Under base rates `measured is not None` is true on
-            # nearly every LLM-touching row while the amount is still the base,
-            # so the old meaning would make it impossible to find the rows where
-            # metering actually decided the price. Keep both facts, separately.
-            #
-            # With three terms in the max(), "above the base" is no longer
-            # enough to say WHY: `tail_credits` and `metered_credits` record
-            # what each term wanted, so a ledger row alone answers "was this
-            # charged for size, or for cost?" — the question the next
-            # recalibration has to ask.
-            metadata = {
-                "estimated": grant.price,
-                "base": grant.price,
-                "measurable": measured is not None,
-                "metered_credits": measured,
-                "tail_credits": tail,
-                "free_tokens": tail_free_tokens(grant.action),
-                "metered": amount > grant.price,
-            }
-            if usage:
-                metadata.update(
-                    {
-                        "input_tokens": usage.get("input_tokens", 0),
-                        "output_tokens": usage.get("output_tokens", 0),
-                        "llm_calls": usage.get("calls", 0),
-                        "cost_usd": round(usage.get("cost_usd", 0.0), 6),
-                    }
-                )
+            # gate reserved, so over/under-runs are measurable. `metadata` came
+            # from compute_charge above; its docstring explains every key.
             payload = {
                 "p_wallet_id": wallet_id,
                 "p_amount": amount,
@@ -1697,16 +1645,20 @@ class EntitlementsService:
         """
         agg: dict[str, dict] = {}
         if wallet_id is not None:
-            query = (
-                self.supabase.table("credit_ledger")
-                .select("action, delta, kind, metadata")
-                .eq("wallet_id", wallet_id)
-                .in_("kind", ["debit", "overage_debit"])
-            )
-            if since is not None:
-                query = query.gte("created_at", since)
-            rows = query.execute()
-            for r in rows.data or []:
+
+            def _query():
+                q = (
+                    self.supabase.table("credit_ledger")
+                    .select("action, delta, kind, metadata")
+                    .eq("wallet_id", wallet_id)
+                    .in_("kind", ["debit", "overage_debit"])
+                )
+                if since is not None:
+                    q = q.gte("created_at", since)
+                return q
+
+            rows = fetch_all(_query)
+            for r in rows:
                 action = r.get("action")
                 if not action:
                     continue
