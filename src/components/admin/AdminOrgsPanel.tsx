@@ -5,11 +5,19 @@
 // (gift, monthly dispersal, ledger).
 import { useState } from "react";
 import { toast } from "sonner";
-import { ChevronRight, Search } from "lucide-react";
+import { ChevronRight, KeyRound, Loader2, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -17,7 +25,10 @@ import {
   useAdminOrgPool,
   useAdminOrgMutations,
   useAdminOrgUsage,
+  useAdminKeyLookup,
   useAdminPartnerKeys,
+  useAdminRevokePartnerKey,
+  type KeyTraceHit,
   type AdminOrgRow,
 } from "@/hooks/useAdminOrgs";
 import { OrgUsageAnalysis } from "@/components/orgs/OrgUsageAnalysis";
@@ -41,6 +52,8 @@ export function AdminOrgsPanel({
 
   return (
     <>
+      <KeyTrace onSelectOrg={onSelectOrg} />
+
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <div className="relative w-full max-w-xs">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -449,6 +462,137 @@ function OrgDetailSheet({ org, onClose }: { org: AdminOrgRow | null; onClose: ()
         </Tabs>
       </SheetContent>
     </Sheet>
+  );
+}
+
+// Live keys are the ALARMING state here — you are on this screen because you
+// think one leaked. Already-dead keys are the reassuring answer.
+const TRACE_TONE = { active: "warn", revoked: "ok", expired: "ok" } as const;
+
+/** Trace a key found in the wild (a public repo, a log, a support ticket) back
+ * to the org that owns it. What is pasted goes straight into a POST body and
+ * only its first 12 characters are used, so the secret never reaches a URL, an
+ * access log or the query cache. Revoking still happens in the org's console —
+ * this answers WHERE. */
+function KeyTrace({ onSelectOrg }: { onSelectOrg: (id: string) => void }) {
+  const [pasted, setPasted] = useState("");
+  const [pending, setPending] = useState<KeyTraceHit | null>(null);
+  const lookup = useAdminKeyLookup();
+  const revoke = useAdminRevokePartnerKey();
+  const hits = lookup.data?.keys;
+
+  const confirmRevoke = () => {
+    if (!pending) return;
+    revoke.mutate(
+      { orgId: pending.org_id, keyId: pending.id },
+      {
+        onSuccess: () => {
+          toast.success(`Revoked "${pending.label}".`);
+          // Re-trace off the key's OWN prefix, not the box (which may have been
+          // edited since), so the row redraws as revoked.
+          lookup.mutate(pending.key_prefix);
+        },
+        onError: (e) => toast.error(e instanceof Error ? e.message : "Revoke failed."),
+        onSettled: () => setPending(null),
+      },
+    );
+  };
+
+  return (
+    <Card className="mb-3 p-4">
+      <SectionLabel>Trace an API key</SectionLabel>
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (pasted.trim()) lookup.mutate(pasted.trim());
+        }}
+      >
+        <div className="relative w-full max-w-sm">
+          <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="mk_live_…"
+            value={pasted}
+            onChange={(e) => setPasted(e.target.value)}
+            className="pl-9 font-mono"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </div>
+        <Button type="submit" disabled={!pasted.trim() || lookup.isPending}>
+          {lookup.isPending ? "Looking up…" : "Look up"}
+        </Button>
+        <p className="text-[11.5px] text-muted-foreground">
+          Paste the prefix or the whole key — only the first 12 characters are sent.
+        </p>
+      </form>
+
+      {lookup.isError && (
+        <p className="mt-3 text-xs text-destructive">That isn&apos;t a Msanii API key.</p>
+      )}
+      {hits?.length === 0 && (
+        <p className="mt-3 text-xs text-muted-foreground">No key matches that prefix.</p>
+      )}
+      {hits?.map((k) => (
+        <div key={k.id} className="mt-3 border-t border-border pt-3 first:border-t-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[13px] font-medium">{k.label}</span>
+            <Tag tone={TRACE_TONE[k.status]}>{k.status}</Tag>
+            <Button
+              variant="link"
+              className="h-auto p-0 text-[13px]"
+              onClick={() => onSelectOrg(k.org_id)}
+            >
+              {k.org_name ?? "Open team"}
+            </Button>
+            <span className="text-[11.5px] text-muted-foreground">
+              last used {shortDate(k.last_used_at)}
+            </span>
+            {/* Only a live key can be killed — revoking again would just reset
+                the 30-day clock that hides it from the console. */}
+            {k.status === "active" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-auto text-destructive hover:text-destructive"
+                aria-label={`Revoke ${k.label}`}
+                onClick={() => setPending(k)}
+              >
+                Revoke
+              </Button>
+            )}
+          </div>
+          <p className="mt-1 text-[11.5px] text-muted-foreground">
+            {k.recent_ips.length === 0
+              ? "No requests in the last 7 days."
+              : `Source IPs (7d): ${k.recent_ips.map((s) => `${s.ip} ×${s.requests}`).join(", ")}`}
+          </p>
+        </div>
+      ))}
+
+      <Dialog open={!!pending} onOpenChange={(o) => !o && setPending(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Revoke &quot;{pending?.label}&quot; for {pending?.org_name ?? "this team"}?
+            </DialogTitle>
+            <DialogDescription>
+              Anything using this key stops working on its next request. This can&apos;t be undone —
+              the team has to mint a replacement, and nobody there is told automatically.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPending(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmRevoke} disabled={revoke.isPending}>
+              {revoke.isPending && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
+              Revoke key
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
   );
 }
 

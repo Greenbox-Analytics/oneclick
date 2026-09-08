@@ -116,6 +116,52 @@ export function useAdminOrgUsage(orgId?: string, range: UsageRange = "mtd"): Use
   });
 }
 
+/** One hit of POST /admin/partner-keys/lookup. `status` is DERIVED here
+ * (expiry folded in), unlike PartnerKey.status which is what's stored. */
+export interface KeyTraceHit {
+  id: string;
+  org_id: string;
+  org_name: string | null;
+  label: string;
+  key_prefix: string;
+  status: "active" | "revoked" | "expired";
+  expires_at: string | null;
+  created_at: string;
+  last_used_at: string | null;
+  /** Distinct source IPs over the last 7 days, busiest first. One key
+   * answering from two continents is the leak signal. */
+  recent_ips: { ip: string; requests: number; last_seen: string }[];
+}
+
+/** "We found a key in the wild — whose is it?" A mutation, not a query: the
+ * pasted value is secret-adjacent, so it rides in a POST body rather than a
+ * URL (which lands in access logs and browser history) and never becomes a
+ * cache key. Only the first 12 characters are used server-side. */
+export function useAdminKeyLookup() {
+  return useMutation({
+    mutationFn: (key: string) =>
+      apiFetch<{ keys: KeyTraceHit[] }>(`${API_URL}/admin/partner-keys/lookup`, {
+        method: "POST",
+        body: JSON.stringify({ key }),
+      }),
+  });
+}
+
+/** Kill a key from the Msanii console. Same one-way revoke the org's own
+ * admins have — the row survives (its spend keeps counting), the credential
+ * stops resolving on the very next request. Nothing un-revokes: the team has
+ * to mint a replacement. */
+export function useAdminRevokePartnerKey() {
+  const qc = useQueryClient();
+  return useMutation<{ status: string }, Error, { orgId: string; keyId: string }>({
+    mutationFn: ({ orgId, keyId }) =>
+      apiFetch(`${API_URL}/admin/orgs/${orgId}/partner-keys/${keyId}`, { method: "DELETE" }),
+    // Toasts live in the panel, like every other mutation in this file.
+    onSuccess: (_data, { orgId }) =>
+      qc.invalidateQueries({ queryKey: ["admin", "orgs", orgId, "partner-keys"] }),
+  });
+}
+
 export function useAdminPartnerKeys(orgId?: string): UseQueryResult<PartnerKeysPayload> {
   return useQuery({
     queryKey: ["admin", "orgs", orgId, "partner-keys"],

@@ -14,6 +14,12 @@ env:
   SERVICE_NAME: msanii-api-dev
   REGION: northamerica-northeast2
   IMAGE_NAME: gcr.io/${{ secrets.GCP_PROJECT_ID }}/msanii-api-dev
+  # Public hostname the external ALB serves for this service. Setting it
+  # switches the deploy to LB-only ingress and points the health check at
+  # the load balancer. Leave it UNSET until scripts/setup-api-load-balancer.sh
+  # has run and the LB actually answers — otherwise a deploy strands the
+  # service behind a load balancer that does not exist yet.
+  API_HOSTNAME: ${{ secrets.DEV_API_HOSTNAME }}
 
 permissions:
   contents: read
@@ -64,10 +70,26 @@ jobs:
             --remove-secrets ALLOWED_ORIGINS,VITE_FRONTEND_URL,VITE_BACKEND_API_URL,FRONTEND_URL,BYPASS_PAYWALLS,POSTHOG_ENABLED,POSTHOG_HOST,APP_ENV,OPS_NOTIFICATION_EMAIL,SLACK_CLIENT_ID,SLACK_CLIENT_SECRET,NOTION_CLIENT_ID,NOTION_CLIENT_SECRET,PAYPAL_ENV \
             --remove-env-vars INTEGRATION_ENCRYPTION_KEY,INTEGRATION_OAUTH_STATE_SECRET,GOOGLE_DRIVE_CLIENT_ID,GOOGLE_DRIVE_CLIENT_SECRET,DROPBOX_APP_KEY,DROPBOX_APP_SECRET,CREDENTIALS_AES_KEY,OPENAI_API_KEY,OPENAI_LLM_MODEL,OPENAI_LLM_MODEL_LARGE,RESEND_API_KEY,RESEND_FROM_EMAIL,ADMIN_EMAILS,TESTER_EMAILS,VITE_SUPABASE_URL,VITE_SUPABASE_ANON_KEY,VITE_SUPABASE_SECRET_KEY,STRIPE_SECRET_KEY,STRIPE_WEBHOOK_SECRET,STRIPE_PRICE_MONTHLY,STRIPE_PRICE_ANNUAL,POSTHOG_PROJECT_TOKEN,POSTHOG_PERSONAL_API_KEY,POSTHOG_PROJECT_ID,SPOTIFY_CLIENT_ID,SPOTIFY_CLIENT_SECRET,PAYPAL_CLIENT_ID,PAYPAL_CLIENT_SECRET 2>/dev/null || true
 
+      - name: Resolve ingress mode
+        id: ingress
+        # `internal-and-cloud-load-balancing` closes the .run.app URL so only
+        # the LB can reach the service. --allow-unauthenticated below stays
+        # REQUIRED either way: ingress is the network gate, IAM is a separate
+        # one, and a serverless NEG does not authenticate as a principal.
+        run: |
+          if [ -n "${{ env.API_HOSTNAME }}" ]; then
+            echo "mode=internal-and-cloud-load-balancing" >> $GITHUB_OUTPUT
+            echo "health=https://${{ env.API_HOSTNAME }}/health" >> $GITHUB_OUTPUT
+          else
+            echo "mode=all" >> $GITHUB_OUTPUT
+            echo "health=" >> $GITHUB_OUTPUT
+          fi
+
       - name: Deploy API to Cloud Run
         # Same image as the product backend, a separate service: PARTNER_API_ENABLED
-        # arms the API routers AND the host lockdown (only /me, /test, /oneclick/v1/*,
-        # /zoe/v1/* and /health answer here), so this host can be wrapped in its own
+        # arms the API routers AND the host lockdown (only the four tool routers'
+        # own routes — /oneclick/v1/*, /registry/v1/*, /splitsheet/v1/*, /zoe/v1/*
+        # — plus /health answer here), so this host can be wrapped in its own
         # domain and never serves the product surface. --timeout 600 covers a long
         # PDF parse; --concurrency 10 because each in-flight calculation holds a worker
         # thread for the whole LLM parse (Cloud Run's default 80 would queue dozens of
@@ -92,6 +114,7 @@ jobs:
             --region ${{ env.REGION }} \
             --platform managed \
             --allow-unauthenticated \
+            --ingress ${{ steps.ingress.outputs.mode }} \
             --port 8080 \
             --memory 1Gi \
             --cpu 1 \
@@ -112,9 +135,24 @@ jobs:
           echo "url=$SERVICE_URL" >> $GITHUB_OUTPUT
 
       - name: Test health endpoint
+        # Under LB-only ingress the .run.app URL stops answering by design, so
+        # check the public hostname — which also proves DNS, the certificate and
+        # the LB backend, not just that the container booted. Retried: a new
+        # revision plus LB propagation is routinely slower than one sleep.
         run: |
-          sleep 10  # Wait for service to be ready
-          curl -f ${{ steps.get-url.outputs.url }}/health || exit 1
+          TARGET="${{ steps.ingress.outputs.health }}"
+          [ -n "$TARGET" ] || TARGET="${{ steps.get-url.outputs.url }}/health"
+          echo "Health check: $TARGET"
+          for attempt in 1 2 3 4 5; do
+            if curl -fsS --max-time 15 "$TARGET"; then
+              echo "healthy on attempt $attempt"
+              exit 0
+            fi
+            echo "attempt $attempt failed; retrying in 10s"
+            sleep 10
+          done
+          echo "::error::$TARGET never returned 200"
+          exit 1
 
       - name: Deployment Summary
         run: |
