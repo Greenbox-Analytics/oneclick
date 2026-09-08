@@ -19,7 +19,7 @@ from auth import get_current_user_email, get_current_user_id
 from orgs import service as orgs_service
 from orgs.models import OrgDispersalUpdate
 from partner_api import service as psvc
-from partner_api.models import PartnerKeyCreate
+from partner_api.models import PartnerKeyCreate, PartnerKeyLookup
 from subscriptions.admin_auth import is_env_admin, is_user_admin, require_admin
 from subscriptions.admin_service import AdminService
 from subscriptions.models import OverridePayload
@@ -609,6 +609,21 @@ async def revoke_partner_key(org_id: str, key_id: str, _admin: str = Depends(req
     if not psvc.revoke_key(get_supabase_client(), org_id, key_id):
         raise HTTPException(status_code=404, detail="Key not found")
     return {"status": "revoked"}
+
+
+@router.post("/partner-keys/lookup")
+async def lookup_partner_key(body: PartnerKeyLookup, _admin: str = Depends(require_admin)) -> dict:
+    """ "We found a key in the wild — whose is it?" Paste the prefix or the whole
+    key; only the first 12 characters are used, and nothing is stored or logged.
+
+    Every match comes back with its org, derived status and recent source IPs,
+    so the next step is DELETE /admin/orgs/{org_id}/partner-keys/{key_id}."""
+    from main import get_supabase_client
+
+    try:
+        return {"keys": psvc.lookup_by_prefix(get_supabase_client(), body.key)}
+    except ValueError:
+        raise HTTPException(status_code=422, detail={"code": "invalid_prefix"})
 
 
 @router.post("/orgs/{org_id}/suspend")

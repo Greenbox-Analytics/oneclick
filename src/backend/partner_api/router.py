@@ -24,7 +24,7 @@ import shutil
 import tempfile
 from pathlib import Path as FSPath
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import Json
 
@@ -53,13 +53,30 @@ oneclick_router = APIRouter(prefix="/oneclick/v1", dependencies=[Depends(require
 # ---- machine (API key) auth --------------------------------------------------
 
 
-def get_partner_context(authorization: str | None = Header(None)) -> PartnerContext:
+def get_partner_context(request: Request, authorization: str | None = Header(None)) -> PartnerContext:
+    """THE chokepoint every partner route shares — auth, rate limit, and the
+    request log all live here so no endpoint can be added without them."""
     bearer = None
     if authorization and authorization.lower().startswith("bearer "):
         bearer = authorization[7:].strip()
-    ctx = psvc.resolve_key(_get_supabase(), bearer)
+    sb = _get_supabase()
+    ctx = psvc.resolve_key(sb, bearer)
     if ctx is None:
+        # Logged, because a burst of these IS the signal that a revoked or
+        # guessed key is being hammered — and nothing else records a 401.
+        psvc.log_request(sb, request, outcome="invalid_key", key_prefix=psvc.presented_prefix(bearer))
         raise HTTPException(status_code=401, detail={"code": "invalid_key"})
+    if psvc.rate_limited(sb, ctx.key_id):
+        psvc.log_request(sb, request, outcome="rate_limited", key_id=ctx.key_id, org_id=ctx.org_id)
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "rate_limited",
+                "message": f"This key is over {psvc.rate_limit_per_min()} requests/minute. Retry shortly.",
+            },
+            headers={"Retry-After": "60"},
+        )
+    psvc.log_request(sb, request, outcome="ok", key_id=ctx.key_id, org_id=ctx.org_id)
     return ctx
 
 

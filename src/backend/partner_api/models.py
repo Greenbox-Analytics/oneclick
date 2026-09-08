@@ -58,6 +58,15 @@ class KeyFolderAssign(BaseModel):
     folder_id: str | None = None
 
 
+class PartnerKeyLookup(BaseModel):
+    """Body of the Msanii-admin "whose key is this?" lookup. A POST body rather
+    than a query param on purpose: an operator will paste the WHOLE key they
+    found, and a URL lands in access logs and browser history. Only the first
+    12 characters are ever read, and none of it is stored or logged."""
+
+    key: str = Field(min_length=1, max_length=200)
+
+
 # ---- request DTOs -----------------------------------------------------------
 
 

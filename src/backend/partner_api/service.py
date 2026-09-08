@@ -227,6 +227,169 @@ def resolve_key(sb, bearer: str | None) -> PartnerContext | None:
     return PartnerContext(org_id=row["org_id"], key_id=row["id"])
 
 
+# ---- request log + rate limit -----------------------------------------------
+
+# Per-KEY, because a key is the unit of compromise: a leaked one drains the org
+# pool as fast as it can dial, and until now the pool balance was the only
+# ceiling. The count covers EVERY logged attempt in the window, refusals
+# included, so a flood stays refused instead of oscillating at the limit.
+RATE_LIMIT_WINDOW = timedelta(seconds=60)
+DEFAULT_RATE_LIMIT_PER_MIN = 60
+DEFAULT_LOG_RETENTION_DAYS = 30
+# user_agent is caller-controlled and unbounded.
+MAX_USER_AGENT = 200
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, "").strip() or default)
+    except ValueError:
+        logging.warning("%s is not an integer; using %d", name, default)
+        return default
+
+
+def rate_limit_per_min() -> int:
+    """Requests per key per minute. 0 disables the limiter — an ops escape
+    hatch, the same posture as BYPASS_PAYWALLS."""
+    return _env_int("PARTNER_RATE_LIMIT_PER_MIN", DEFAULT_RATE_LIMIT_PER_MIN)
+
+
+def presented_prefix(bearer: str | None) -> str | None:
+    """The 12 chars a failed auth may record. None unless the value is one of
+    OURS: a secret mis-pasted from another system must not leave a fragment in
+    our database."""
+    if not bearer or not bearer.startswith(KEY_PREFIX):
+        return None
+    return bearer[:12]
+
+
+def client_ip(request) -> str | None:
+    """The caller's IP. Cloud Run APPENDS the real client to whatever
+    X-Forwarded-For the caller sent, so the LAST entry is the trustworthy one
+    and everything before it is caller-controlled. (Behind a global load
+    balancer Google adds its own hop and the real client moves to
+    second-to-last — revisit here if an LB is ever put in front.)"""
+    if request is None:
+        return None
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[-1].strip()[:64] or None
+    return getattr(getattr(request, "client", None), "host", None)
+
+
+def log_request(sb, request, *, outcome: str, key_id=None, org_id=None, key_prefix=None) -> None:
+    """One row per auth attempt: the rate-limit counter AND the only record of
+    where a key is used from. Best-effort — an audit write must never fail a
+    paid request."""
+    try:
+        sb.table("partner_api_requests").insert(
+            {
+                "key_id": key_id,
+                "org_id": org_id,
+                "key_prefix": key_prefix,
+                "client_ip": client_ip(request),
+                "user_agent": ((request.headers.get("user-agent") or "")[:MAX_USER_AGENT] or None) if request else None,
+                "path": request.url.path if request else None,
+                "outcome": outcome,
+            }
+        ).execute()
+    except Exception:
+        logging.exception("partner request log failed outcome=%s key=%s", outcome, key_id)
+
+
+def rate_limited(sb, key_id: str) -> bool:
+    """Is this key over its per-minute ceiling? A rolling 60s count, not a fixed
+    bucket, so a burst cannot straddle a boundary and land 2x the limit.
+
+    Fails OPEN: a broken counter must not take the API down for every partner.
+    The pool balance is still a hard ceiling underneath."""
+    limit = rate_limit_per_min()
+    if limit <= 0:
+        return False
+    try:
+        since = (datetime.now(UTC) - RATE_LIMIT_WINDOW).isoformat()
+        res = (
+            sb.table("partner_api_requests")
+            .select("id", count="exact")
+            .eq("key_id", key_id)
+            .gte("created_at", since)
+            .execute()
+        )
+        return (res.count or 0) >= limit
+    except Exception:
+        logging.exception("partner rate-limit check failed key=%s; allowing", key_id)
+        return False
+
+
+def purge_request_log(sb) -> int:
+    """Drop aged-out rows; called by the daily billing sweep. The log is a
+    rolling window — per-key SPEND history lives on credit_ledger.metadata and
+    is never purged."""
+    days = _env_int("PARTNER_LOG_RETENTION_DAYS", DEFAULT_LOG_RETENTION_DAYS)
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+    res = sb.table("partner_api_requests").delete().lt("created_at", cutoff).execute()
+    return len(res.data or [])
+
+
+def recent_client_ips(sb, key_id: str, since: str, limit: int = 20) -> list[dict]:
+    """Distinct source IPs for one key since `since`, busiest first. Empty on a
+    read failure — a lookup that cannot show IPs is still worth answering."""
+    try:
+        rows = (
+            sb.table("partner_api_requests")
+            .select("client_ip, created_at")
+            .eq("key_id", key_id)
+            .gte("created_at", since)
+            .order("created_at", desc=True)
+            .limit(2000)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        logging.exception("recent_client_ips failed key=%s", key_id)
+        return []
+    seen: dict[str, dict] = {}
+    for r in rows:
+        ip = r.get("client_ip")
+        if not ip:
+            continue
+        # Newest-first, so the first sighting of an IP IS its last_seen.
+        hit = seen.setdefault(ip, {"ip": ip, "requests": 0, "last_seen": r.get("created_at")})
+        hit["requests"] += 1
+    return sorted(seen.values(), key=lambda h: h["requests"], reverse=True)[:limit]
+
+
+def lookup_by_prefix(sb, presented: str, *, ip_window_days: int = 7) -> list[dict]:
+    """ "We found a key in the wild — whose is it?" Matches on the 12-char
+    prefix, so an admin can paste a whole key and the secret still never
+    reaches a query string, a browser history or an access log.
+
+    A LIST, not a row: after mk_live_ the prefix is 4 characters, so a collision
+    is unlikely but possible — org and label disambiguate. Long-inactive keys
+    are INCLUDED (is_hidden is deliberately not applied): a key leaked a year
+    ago and already revoked is exactly what someone looks up.
+
+    Each hit carries its recent distinct client IPs, which is the actual leak
+    signal — one key answering from two continents is not a busy partner."""
+    prefix = presented_prefix((presented or "").strip())
+    if prefix is None:
+        raise ValueError("not a Msanii API key prefix")
+    keys = sb.table("partner_api_keys").select(KEY_COLUMNS).eq("key_prefix", prefix).execute().data or []
+    if not keys:
+        return []
+    org_ids = sorted({k["org_id"] for k in keys if k.get("org_id")})
+    orgs = sb.table("organizations").select("id, name").in_("id", org_ids).execute().data or []
+    names = {o["id"]: o.get("name") for o in orgs}
+    since = (datetime.now(UTC) - timedelta(days=ip_window_days)).isoformat()
+    for k in keys:
+        k["org_name"] = names.get(k.get("org_id"))
+        # Derived, like the usage rollup: the column says nothing about expiry.
+        k["status"] = key_status(k)
+        k["recent_ips"] = recent_client_ips(sb, k["id"], since)
+    return keys
+
+
 # ---- billing ----------------------------------------------------------------
 
 

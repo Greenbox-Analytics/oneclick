@@ -1738,6 +1738,7 @@ const ApiErrorsPanel = () => (
         ["404", "model_not_found", "Zoe only: a model other than \"zoe\" was requested."],
         ["413", "file_too_large / too_many_contracts", "Statement over 10 MB, contracts over 20 MB in total, or more than 10 files."],
         ["422", "invalid_request", "Both or neither of contracts / contract_terms, a non-PDF contract, malformed JSON, no contracts on a parse, a split sheet body that fails validation — or, for Zoe, an empty or over-long messages list."],
+        ["429", "rate_limited", "The key sent more than 60 requests in a minute; the response carries Retry-After: 60. The limit is per key, so parallel workloads are cleanest on separate keys."],
         ["500", "internal_error", "A split sheet couldn't be rendered. Quote request_id to support."],
         ["502", "zoe_failed", "Zoe didn't answer. Retry. On a Zoe stream this arrives as an error frame before [DONE] instead."],
       ]}

@@ -438,6 +438,18 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
         except Exception:
             logger.exception("sweep team storage overage billing failed")
 
+    # The partner request log is a rolling window (rate-limit counter + the only
+    # record of where a key is used from), not history — drop what has aged out.
+    # Isolated like every other step; per-key SPEND lives on credit_ledger and
+    # is never touched here.
+    partner_log_purged = 0
+    try:
+        from partner_api.service import purge_request_log
+
+        partner_log_purged = purge_request_log(sb)
+    except Exception:
+        logger.exception("sweep partner request-log purge failed")
+
     return {
         "walletsRolled": rolled,
         "overageBilled": overage_billed,
@@ -450,4 +462,5 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
         "orgsLapsed": standing_stats["lapsed"],
         "graceStarted": standing_stats["grace_started"],
         "teamStorageInvoiced": team_storage_invoiced,
+        "partnerLogPurged": partner_log_purged,
     }
