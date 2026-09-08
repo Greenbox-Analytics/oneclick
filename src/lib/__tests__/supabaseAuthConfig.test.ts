@@ -27,6 +27,9 @@ describe("supabase/config.toml", () => {
   it("pins the redirect origins the app signs up from", () => {
     expect(config).toMatch(/^site_url\s*=\s*"https:\/\/www\.msanii-beta\.com"/m);
     expect(config).toContain('"http://localhost:8080/**"');
+    // The dev site must be allowlisted or Auth silently swaps the dev
+    // emailRedirectTo for site_url and dev confirmation links open PROD.
+    expect(config).toContain('"https://msanii-dev.vercel.app/**"');
   });
 
   it("pins the hourly email rate limit above the CLI default of 2", () => {

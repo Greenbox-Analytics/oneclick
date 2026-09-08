@@ -14,7 +14,13 @@ additional_redirect_urls = [
   "https://www.msanii-beta.com/**",
   "https://msanii-beta.com/**",
   "http://localhost:8080/**",
-  # Add the dev/Vercel deployment origin(s) here, e.g. "https://<app>.vercel.app/**".
+  # Dev site (Vercel project `msanii-dev`, auto-deployed from main). Without it
+  # Auth rejects the dev emailRedirectTo and falls back to site_url, so every
+  # confirmation / reset link sent from dev lands on PROD.
+  "https://msanii-dev.vercel.app/**",
+  # Vercel preview + per-deployment URLs for the team (Supabase's recommended
+  # pattern: https://*-<team-slug>.vercel.app/**).
+  "https://*-greenbox-analytics-projects.vercel.app/**",
 ]
 
 # WARNING: `supabase config push` applies CLI DEFAULTS for any key it knows
