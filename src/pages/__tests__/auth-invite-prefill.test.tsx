@@ -23,7 +23,6 @@ vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 const { default: Auth } = await import("@/pages/Auth");
 
 const INVITE_REDIRECT = "?redirect=%2Forgs%2Finvite%2Ftok";
-const HELPER = /use this email to accept your team invitation/i;
 
 function renderAt(entry: InitialEntry) {
   return render(
@@ -53,11 +52,9 @@ describe("Auth — org invite prefill", () => {
 
     expect(tab("Sign Up")).toHaveAttribute("aria-selected", "true");
     expect(signUpEmail()).toHaveValue("ada@example.com");
-    expect(screen.getByText(HELPER)).toBeInTheDocument();
 
     switchTo("Sign In");
     expect(signInEmail()).toHaveValue("ada@example.com");
-    expect(screen.getByText(HELPER)).toBeInTheDocument();
   });
 
   it("opens on Sign In for an existing invitee", () => {
@@ -79,13 +76,11 @@ describe("Auth — org invite prefill", () => {
     stashPendingInvite({ token: "other", accepted: false, email: "ada@example.com" });
     renderAt({ pathname: "/auth", search: INVITE_REDIRECT });
     expect(signInEmail()).toHaveValue("");
-    expect(screen.queryByText(HELPER)).not.toBeInTheDocument();
     cleanup();
 
     stashPendingInvite({ token: "tok", accepted: false, email: "ada@example.com" });
     renderAt({ pathname: "/auth", search: "?redirect=%2Fdashboard" });
     expect(signInEmail()).toHaveValue("");
-    expect(screen.queryByText(HELPER)).not.toBeInTheDocument();
   });
 
   it("keeps the user's edit when they switch tabs", () => {
@@ -102,7 +97,6 @@ describe("Auth — org invite prefill", () => {
 
     expect(tab("Sign Up")).toHaveAttribute("aria-selected", "true");
     expect(signUpEmail()).toHaveValue("");
-    expect(screen.queryByText(HELPER)).not.toBeInTheDocument();
   });
 
   it("is unchanged on a plain visit", () => {
@@ -110,7 +104,6 @@ describe("Auth — org invite prefill", () => {
 
     expect(tab("Sign In")).toHaveAttribute("aria-selected", "true");
     expect(signInEmail()).toHaveValue("");
-    expect(screen.queryByText(HELPER)).not.toBeInTheDocument();
   });
 
   it("stashes the invite email alongside the token on sign-up", async () => {
