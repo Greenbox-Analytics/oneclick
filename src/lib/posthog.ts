@@ -1,4 +1,5 @@
 import posthog from "posthog-js";
+import { scrubEmailFromEvent } from "@/lib/posthogScrub";
 
 const API_KEY = import.meta.env.VITE_POSTHOG_PROJECT_TOKEN as string | undefined;
 const HOST = (import.meta.env.VITE_POSTHOG_HOST as string | undefined) ?? "https://us.i.posthog.com";
@@ -22,6 +23,10 @@ export function initPostHog(): void {
     disable_session_recording: true, // privacy-forward default for beta v1
     persistence: "localStorage+cookie",
     person_profiles: "identified_only", // create person profiles only after identify()
+    // The org-invite link carries the invitee's email as a query param; strip
+    // it from every URL-bearing property before it leaves the browser (the
+    // first $pageview fires inside init(), before any page can clean the URL).
+    before_send: scrubEmailFromEvent,
     // posthog-js fires the initial $pageview synchronously during init() when
     // capture_pageview is true. Register the environment super-property inside
     // `loaded` so it's attached BEFORE that first event — registering after

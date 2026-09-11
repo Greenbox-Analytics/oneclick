@@ -34,11 +34,11 @@ def _configure(monkeypatch, reply_to=None):
         monkeypatch.setenv("RESEND_REPLY_TO", reply_to)
 
 
-def _send_org_invite(existing_user=False, inviter="Alice"):
+def _send_org_invite(existing_user=False, inviter="Alice", recipient="new@acme.com"):
     from orgs import emails
 
     return emails.send_org_invite_email(
-        recipient_email="new@acme.com",
+        recipient_email=recipient,
         org_name="Acme",
         inviter_name=inviter,
         role="member",
@@ -87,6 +87,36 @@ def test_org_invite_reply_to_prefers_the_monitored_inbox(monkeypatch):
     sent = _capture_send(monkeypatch)
     _send_org_invite()
     assert sent["reply_to"] == "hello@msanii.test"
+
+
+def test_org_invite_link_carries_urlencoded_email_and_signup_hint(monkeypatch):
+    """The claim link is the only thing that carries the invitee's address to
+    the client (the public preview deliberately withholds it), so /auth can
+    prefill it. A new invitee also gets a `signup=1` hint so /auth opens on
+    the Sign Up tab. The HTML attribute must escape the `&`."""
+    _configure(monkeypatch)
+    sent = _capture_send(monkeypatch)
+    _send_org_invite(existing_user=False)
+    assert f"{FRONTEND}/orgs/invite/{TOKEN}?email=new%40acme.com&signup=1" in sent["text"]
+    assert f'href="{FRONTEND}/orgs/invite/{TOKEN}?email=new%40acme.com&amp;signup=1"' in sent["html"]
+    assert '&signup=1"' not in sent["html"]
+
+
+def test_org_invite_link_omits_signup_hint_for_existing_users(monkeypatch):
+    _configure(monkeypatch)
+    sent = _capture_send(monkeypatch)
+    _send_org_invite(existing_user=True)
+    assert "email=new%40acme.com" in sent["text"]
+    assert "signup=" not in sent["text"]
+    assert "signup=" not in sent["html"]
+
+
+def test_org_invite_link_encodes_plus_in_address(monkeypatch):
+    _configure(monkeypatch)
+    sent = _capture_send(monkeypatch)
+    _send_org_invite(recipient="new+team@acme.com")
+    assert "email=new%2Bteam%40acme.com" in sent["text"]
+    assert "email=new%2Bteam%40acme.com" in sent["html"]
 
 
 def test_org_invite_has_no_raw_link_dump(monkeypatch):

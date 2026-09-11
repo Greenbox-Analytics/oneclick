@@ -1,16 +1,24 @@
 // src/components/billing/PlanCard.tsx
 import { Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/contexts/AuthContext";
 import { useEntitlements } from "@/hooks/useEntitlements";
-import { useOpenBillingPortal } from "@/hooks/useBilling";
+import {
+  useCreateCheckoutSession,
+  useOpenBillingPortal,
+  useOpenCancelFlow,
+  useSubscriptionConflict,
+} from "@/hooks/useBilling";
 import { useIsAdmin } from "@/hooks/useAdmin";
 import { AdminBadge } from "@/components/admin/AdminBadge";
 import { isPaidTier, tierLabel, usd, ENTERPRISE_LABEL, TIER_PRICES, type TierKey } from "@/lib/tiers";
-import { fmtDate } from "@/lib/utils";
+import { fmtDate, fmtDaysLeft } from "@/lib/utils";
 import { orgContext } from "@/lib/credits";
+import { planLabel, readPendingPlan, stashPendingPlan } from "@/lib/pendingPlan";
 
 const priceLabel = (tier: string, period: string | null): { amount: string; unit: string } => {
   const key: TierKey = tier === "basic" || tier === "pro" ? tier : "free";
@@ -21,12 +29,19 @@ const priceLabel = (tier: string, period: string | null): { amount: string; unit
 
 export function PlanCard() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const { data: ent } = useEntitlements();
   const { isAdmin } = useIsAdmin();
   const { openPortal, isPending: isOpeningPortal } = useOpenBillingPortal();
+  const { openCancelFlow, isPending: isOpeningCancel } = useOpenCancelFlow();
+  const { mutateAsync: createCheckout, isPending: isStartingCheckout } = useCreateCheckoutSession();
+  const handleConflict = useSubscriptionConflict();
 
   const sub = ent?.subscription;
   const managedByOrg = orgContext(ent);
+  // "Ends Oct 10, 2026 · 12 days left" once a cancel is scheduled; the row
+  // otherwise reads "Renews <date>".
+  const endsIn = sub?.cancelAtPeriodEnd ? fmtDaysLeft(sub.currentPeriodEnd) : "";
 
   // Org billing context (Licensing Phase B, spec §5): the org's pool pays, so
   // there's no plan to upgrade or price to show — just who's managing it, plus
@@ -77,6 +92,24 @@ export function PlanCard() {
   const adminGranted = isPaid && !sub?.stripeSubscriptionId; // Paid tier without Stripe = admin/manual grant
   const { amount, unit } = priceLabel(tier, sub?.planPeriod ?? null);
 
+  // A paid checkout the user started but didn't finish (src/lib/pendingPlan.ts).
+  // Only consulted once entitlements are in and trustworthy AND say free —
+  // the memory is intent, never a claim about what they have.
+  const pending = ent && !ent.degraded && !isPaid ? readPendingPlan(user?.id) : null;
+  const resumeCheckout = async () => {
+    if (!pending || !user) return;
+    try {
+      const url = await createCheckout(pending.plan);
+      stashPendingPlan(user.id, pending.plan); // fresh window if they abandon again
+      window.location.href = url;
+    } catch (e) {
+      // Stale entitlements (the server already has a live subscription):
+      // the handler forgets the plan and opens the portal instead.
+      if (await handleConflict(e)) return;
+      toast.error("Couldn't start checkout. Try again or contact support.");
+    }
+  };
+
   return (
     <Card className="p-6">
       <div className="flex items-start justify-between gap-3.5">
@@ -107,10 +140,13 @@ export function PlanCard() {
             </div>
             {sub?.currentPeriodEnd && (
               <div className="flex items-center justify-between text-sm py-2.5 border-t border-border/60">
-                <span className="text-muted-foreground">
-                  {sub.cancelAtPeriodEnd ? "Cancels" : "Renews"}
+                <span className="text-muted-foreground">{sub.cancelAtPeriodEnd ? "Ends" : "Renews"}</span>
+                <span className="tabular-nums">
+                  {fmtDate(sub.currentPeriodEnd)}
+                  {sub.cancelAtPeriodEnd && endsIn ? (
+                    <span className="text-muted-foreground"> · {endsIn}</span>
+                  ) : null}
                 </span>
-                <span className="tabular-nums">{fmtDate(sub.currentPeriodEnd)}</span>
               </div>
             )}
             {adminGranted && (
@@ -134,6 +170,11 @@ export function PlanCard() {
                   Manage subscription
                 </Button>
               )
+            ) : pending ? (
+              <Button size="sm" onClick={resumeCheckout} disabled={isStartingCheckout}>
+                {isStartingCheckout && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Finish upgrading to {planLabel(pending.plan)}
+              </Button>
             ) : (
               <Button size="sm" onClick={() => navigate("/pricing")}>
                 Upgrade
@@ -142,6 +183,22 @@ export function PlanCard() {
             <Button variant="ghost" size="sm" onClick={() => navigate("/pricing")}>
               View plans
             </Button>
+            {isPaid && !adminGranted && !sub?.cancelAtPeriodEnd && (
+              // Deep-links into the Portal's cancel flow, which redirects back
+              // here the moment the user confirms (the Portal home never does).
+              // Gone once the cancel is scheduled: reactivating is "Renew plan"
+              // on the Portal home, behind Manage subscription.
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground"
+                onClick={openCancelFlow}
+                disabled={isOpeningCancel}
+              >
+                {isOpeningCancel && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Cancel plan
+              </Button>
+            )}
           </div>
           {adminGranted && (
             <p className="text-xs text-muted-foreground/70 mt-3 max-w-[360px]">

@@ -4,11 +4,11 @@
 // their OLD balance with no acknowledgement that anything happened (React
 // Query wouldn't refetch entitlements for up to 60s).
 //
-// Mirrors the subscription-return pattern in pages/Profile.tsx: the credits are
-// granted by a webhook, so the balance is not there the instant the browser
-// gets back — poll, then say something either way rather than leaving the user
-// wondering whether their card was charged.
-import { useEffect, useRef } from "react";
+// Mirrors the subscription-return pattern in hooks/useCheckoutReturn.ts: the
+// credits are granted by a webhook, so the balance is not there the instant
+// the browser gets back — poll, then say something either way rather than
+// leaving the user wondering whether their card was charged.
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -28,7 +28,11 @@ export function useTopupReturn(): void {
   const queryClient = useQueryClient();
   const { data: ent } = useEntitlements();
 
-  const status = searchParams.get("topup");
+  // Frozen at mount. useSearchParams re-memoizes on location.search, so
+  // reading this live would let the strip below re-key the effect and run
+  // its cleanup — killing the poll it had just armed, so the success toast
+  // could never fire.
+  const [status] = useState(() => searchParams.get("topup"));
 
   // Purchased credits land in the RESERVE bucket (kind='purchase'), so that is
   // what moves. Read through a ref: including it in the effect's deps would
@@ -57,7 +61,7 @@ export function useTopupReturn(): void {
     );
 
     if (status !== "success") {
-      toast.info("Checkout cancelled — no credits were purchased.");
+      toast.info("Checkout cancelled — no credits were purchased.", { id: "topup-canceled" });
       return;
     }
 
@@ -79,7 +83,9 @@ export function useTopupReturn(): void {
         settled = true;
         clearInterval(interval);
         clearTimeout(timeout);
-        toast.success(`Credits added — ${(now - before).toLocaleString()} credits are ready to use.`);
+        toast.success(`Credits added — ${(now - before).toLocaleString()} credits are ready to use.`, {
+          id: "topup-landed",
+        });
         return;
       }
       invalidateCreditSurfaces(queryClient);
@@ -91,14 +97,14 @@ export function useTopupReturn(): void {
       // Not a failure: webhooks can lag, and delayed payment methods settle
       // hours later. Never imply the payment didn't go through.
       invalidateCreditSurfaces(queryClient);
-      toast.success("Payment received — your credits will appear shortly.");
+      toast.success("Payment received — your credits will appear shortly.", { id: "topup-landed" });
     }, POLL_TIMEOUT_MS);
 
     return () => {
       clearInterval(interval);
       clearTimeout(timeout);
     };
-    // Deliberately keyed on `status` alone: this must run once per return.
+    // Keyed on the latched `status` alone: this must run once per return.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 }

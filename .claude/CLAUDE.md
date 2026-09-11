@@ -297,7 +297,7 @@ Product analytics live in a single PostHog project (`https://us.posthog.com`, pr
 |---|---|---|
 | Backend | `src/backend/analytics.py` | Thin `posthog-python` wrapper. `capture()`/`identify()` are no-ops unless `POSTHOG_ENABLED=true` is set in env. |
 | Backend middleware | `src/backend/middleware/analytics_middleware.py` | Fires `request_completed` / `request_failed` for every API call. Excludes `/static`, `/docs`, `/redoc`, `/openapi.json`, `/health`. |
-| Frontend | `src/lib/posthog.ts` | `posthog-js` init — autocapture off, session recording off, person profiles `identified_only`. Captures `$pageview` / `$pageleave`. |
+| Frontend | `src/lib/posthog.ts` | `posthog-js` init — autocapture off, session recording off, person profiles `identified_only`. Captures `$pageview` / `$pageleave`. A `before_send` hook (`src/lib/posthogScrub.ts`) strips the `email=` query param the org-invite link carries (`/orgs/invite/{token}?email=…&signup=1`, the /auth prefill source) from every URL-bearing property — the first `$pageview` fires inside `init()` before any page can clean the URL, and posthog persists `$initial_person_info` / `$session_entry_url`. |
 | Frontend hook | `src/hooks/useAnalyticsContext.ts` | Pulls `/me/analytics-context` and `identify()`s the user with plan/role/tester/admin properties. Cached in localStorage. |
 
 ### Event taxonomy
@@ -312,7 +312,7 @@ The canonical "a tool was used" signal is `tool_used` with `properties.tool ∈ 
 | `splitsheet_generated` | `splitsheet/router.py` | Fired after PDF/DOCX is built. |
 | `work_created` / `work_submitted_for_registration` / `registry_work_registered` / `registry_collaborator_invited` | `registry/router.py` | Registry lifecycle. |
 | `contract_uploaded` | `main.py` | Includes `file_size`. |
-| `checkout_started` / `billing_portal_opened` | `subscriptions/billing_router.py` | Stripe entry points. |
+| `checkout_started` / `billing_portal_opened` | `subscriptions/billing_router.py` | Stripe entry points. `billing_portal_opened.flow` is `home` or `subscription_cancel` (the `/profile` "Cancel plan" deep-link). |
 | `subscription_activated` / `subscription_canceled` / `payment_failed` | `subscriptions/stripe_events.py` | Stripe webhook outcomes. |
 | `team_created` / `team_archived` / `team_unarchived` / `team_dissolved` | `orgs/router.py` | Self-serve team lifecycle (`POST /orgs` is self-serve-only now; enterprise creation via `POST /admin/orgs` is admin tooling and untracked). |
 | `team_grace_started` / `team_lapsed` / `team_reactivated` | `orgs/standing.py` (`_notify_standing`, `f"team_{kind}"`) | Daily standing-sweep transitions (`evaluate_standing`); captured to the covering admin, not the affected members. |

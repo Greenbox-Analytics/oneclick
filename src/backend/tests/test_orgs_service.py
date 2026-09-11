@@ -1884,6 +1884,10 @@ def test_invite_email_links_to_the_tokened_claim_page(monkeypatch):
         )
         assert f"https://app.msanii.test/orgs/invite/{TOKEN}" in sent["html_body"]
         assert "/notifications" not in sent["html_body"]
+        # The link also carries the invitee's address (for the /auth prefill)
+        # and, for a brand-new invitee only, a Sign Up tab hint.
+        assert "email=new%40acme.com" in sent["html_body"]
+        assert ("signup=1" in sent["html_body"]) is (not existing_user)
 
 
 def test_invite_notification_is_an_org_invitation():

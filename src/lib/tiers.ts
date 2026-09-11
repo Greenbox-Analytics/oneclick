@@ -31,6 +31,19 @@ export function isPaidTier(tier: string | null | undefined): boolean {
 }
 
 /**
+ * "One live personal subscription per user" (2026-09-10), rule 1, mirrored
+ * from billing_router.create_checkout_session: entitlements name a Stripe
+ * subscription AND it isn't canceled — past_due and trialing count. An
+ * admin-granted paid tier has no subscription id, so it reads as NOT live and
+ * may buy like anyone else. Callers decide what a degraded read means.
+ */
+export function hasLiveSubscription(
+  ent: { status?: string | null; subscription?: { stripeSubscriptionId?: string | null } | null } | null | undefined,
+): boolean {
+  return !!ent?.subscription?.stripeSubscriptionId && ent.status !== "canceled";
+}
+
+/**
  * List prices in USD — the ONLY place the frontend states them. Must match the
  * Stripe prices behind STRIPE_PRICE_* / STRIPE_PRICE_PRO_MAX_*; change together.
  */

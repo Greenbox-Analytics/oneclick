@@ -4,6 +4,7 @@ header, CTA button, optional footer) lives in `_layout` only."""
 
 import html
 import os
+from urllib.parse import urlencode
 
 import resend
 
@@ -47,7 +48,8 @@ def _frontend_url() -> str:
 def _layout(headline: str, detail_html: str, cta_href: str, cta_label: str, footer: str = "") -> str:
     """The one HTML shell every org email shares. `detail_html` is
     pre-escaped/pre-built HTML (paragraphs, optional note); `footer` is
-    plain text, wrapped here when present."""
+    plain text, wrapped here when present. `cta_href` is a RAW url — it is
+    attribute-escaped here (a `&` between query params must be `&amp;`)."""
     footer_html = f'<p style="font-size: 13px; color: #999; text-align: center;">{footer}</p>' if footer else ""
     return f"""
     <div style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 560px; margin: 0 auto; padding: 32px 24px;">
@@ -57,7 +59,7 @@ def _layout(headline: str, detail_html: str, cta_href: str, cta_label: str, foot
       <p style="font-size: 16px; color: #333;">{headline}</p>
       {detail_html}
       <div style="text-align: center; margin: 32px 0;">
-        <a href="{cta_href}"
+        <a href="{html.escape(cta_href, quote=True)}"
            style="display: inline-block; background: #1a3a2a; color: white; padding: 14px 32px;
                   border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 15px;">
           {cta_label}
@@ -95,7 +97,18 @@ def send_org_invite_email(
     # board-teams module that had one was removed 2026-08-16), so "you'll be added
     # automatically" was never true. The token is the only thing that carries
     # the invite; the link has to hold it.
-    cta_href = f"{_frontend_url()}/orgs/invite/{token}"
+    #
+    # The link ALSO carries the invitee's address, so /auth can prefill it on
+    # both tabs — the public preview endpoint deliberately withholds the email,
+    # so this is its only route to the client. The claim page scrubs it from
+    # the address bar on arrival and forwards it through router state. A
+    # brand-new invitee gets `signup=1` so /auth opens on the Sign Up tab;
+    # the server never trusts either value (accept still matches the signed-in
+    # account against the invite row).
+    query = {"email": recipient_email}
+    if not existing_user:
+        query["signup"] = "1"
+    cta_href = f"{_frontend_url()}/orgs/invite/{token}?{urlencode(query)}"
     if existing_user:
         cta_label = "Review invitation"
         footer = "You can accept or decline from the link above. This invitation expires in 48 hours."

@@ -4,16 +4,26 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Music } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { Separator } from "@/components/ui/separator";
-import { orgInvitePath, orgInviteTokenFromPath, stashPendingInvite } from "@/lib/pendingInvite";
+import {
+  normalizeInviteEmail,
+  orgInvitePath,
+  orgInviteTokenFromPath,
+  readPendingInvite,
+  stashPendingInvite,
+  type AuthInviteState,
+  type AuthTab,
+} from "@/lib/pendingInvite";
+
 
 const Auth = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const location = useLocation();
   const { signIn, signUp, signInWithGoogle } = useAuth();
 
   // Honor an optional ?redirect= return path (e.g. a collaboration invite link).
@@ -23,12 +33,28 @@ const Auth = () => {
     rawRedirect && rawRedirect.startsWith("/") && !rawRedirect.startsWith("//")
       ? rawRedirect
       : "/dashboard";
+  const inviteToken = orgInviteTokenFromPath(redirectTo);
+
+  // An org invitee arrives with their address and a tab hint in router state
+  // (OrgInviteClaim's signed-out gate) — never in the URL. The session stash
+  // is the fallback for a reload or the Google OAuth round-trip, and only
+  // counts when it belongs to the invite we're returning to. Latched once:
+  // the user may edit the field and a re-render must not overwrite that.
+  const inviteState = (location.state ?? null) as AuthInviteState | null;
+  const [inviteEmail] = useState<string | null>(() => {
+    const fromState = normalizeInviteEmail(inviteState?.email);
+    if (fromState) return fromState;
+    if (!inviteToken) return null;
+    const stashed = readPendingInvite();
+    return stashed?.token === inviteToken ? (stashed.email ?? null) : null;
+  });
+  const [tab, setTab] = useState<AuthTab>(() => (inviteState?.tab === "signup" ? "signup" : "signin"));
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
-  const [signInEmail, setSignInEmail] = useState("");
+  const [signInEmail, setSignInEmail] = useState(inviteEmail ?? "");
   const [signInPassword, setSignInPassword] = useState("");
   const [signUpName, setSignUpName] = useState("");
-  const [signUpEmail, setSignUpEmail] = useState("");
+  const [signUpEmail, setSignUpEmail] = useState(inviteEmail ?? "");
   const [signUpPassword, setSignUpPassword] = useState("");
 
   const handleSignIn = async (e: React.FormEvent) => {
@@ -61,10 +87,10 @@ const Auth = () => {
     setIsLoading(true);
     try {
       // An org invite must survive the confirm-email detour: stash the token
-      // for ConfirmEmail/Onboarding and send the confirmation link back to
-      // the claim page rather than straight to /onboarding.
-      const inviteToken = orgInviteTokenFromPath(redirectTo);
-      if (inviteToken) stashPendingInvite({ token: inviteToken, accepted: false });
+      // (and the prefill email, for the wrong-account path) for
+      // ConfirmEmail/Onboarding and send the confirmation link back to the
+      // claim page rather than straight to /onboarding.
+      if (inviteToken) stashPendingInvite({ token: inviteToken, accepted: false, email: inviteEmail });
       await signUp(
         signUpEmail,
         signUpPassword,
@@ -131,7 +157,7 @@ const Auth = () => {
             <CardDescription>Sign in or create an account to get started</CardDescription>
           </CardHeader>
           <CardContent>
-            <Tabs defaultValue="signin" className="w-full">
+            <Tabs value={tab} onValueChange={(v) => setTab(v as AuthTab)} className="w-full">
               <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="signin">Sign In</TabsTrigger>
                 <TabsTrigger value="signup">Sign Up</TabsTrigger>
@@ -147,7 +173,7 @@ const Auth = () => {
                       placeholder="you@example.com" 
                       value={signInEmail}
                       onChange={(e) => setSignInEmail(e.target.value)}
-                      required 
+                      required
                     />
                   </div>
                   <div className="space-y-2">
@@ -226,7 +252,7 @@ const Auth = () => {
                       placeholder="you@example.com" 
                       value={signUpEmail}
                       onChange={(e) => setSignUpEmail(e.target.value)}
-                      required 
+                      required
                     />
                   </div>
                   <div className="space-y-2">

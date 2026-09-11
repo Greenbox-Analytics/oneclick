@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+import stripe
 
 from tests.conftest import TEST_USER_ID, MockQueryBuilder
 
@@ -32,20 +33,48 @@ def _subscription_event(
     price_id="price_monthly_123",
     current_period_start=1700000000,
     current_period_end=1702592000,
+    subscription_id="sub_123",
+    cancel_at=None,
 ):
     """Build a mock customer.subscription.* event."""
     e = MagicMock()
     e.id = f"evt_{event_type.replace('.', '_')}_1"
     e.type = event_type
     obj = e.data.object
+    obj.id = subscription_id
     obj.metadata = {"user_id": user_id} if user_id else {}
     obj.status = status
     obj.cancel_at_period_end = cancel_at_period_end
+    obj.cancel_at = cancel_at  # explicit: a bare MagicMock attribute is truthy
     obj.canceled_at = None if not cancel_at_period_end else 1700100000
     obj.current_period_start = current_period_start
     obj.current_period_end = current_period_end
     obj.__getitem__ = lambda self, k: {"items": {"data": [{"price": {"id": price_id}}]}}[k] if k == "items" else None
     return e
+
+
+def _fake_stripe_subscription(price_id="price_monthly_123", status="active"):
+    """What stripe.Subscription.retrieve hands handle_checkout_session_completed."""
+    fake_sub = MagicMock(
+        status=status,
+        cancel_at_period_end=False,
+        cancel_at=None,
+        canceled_at=None,
+        current_period_start=1700000000,
+        current_period_end=1702592000,
+    )
+    fake_sub.__getitem__ = lambda self, k: (
+        {"items": {"data": [{"price": {"id": price_id}}]}}[k] if k == "items" else None
+    )
+    return fake_sub
+
+
+def _row_read(sb, row):
+    """Point the bare mock's single-.eq() read chain at `row` — the shape every
+    personal handler uses to read the caller's own subscriptions row."""
+    sb.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(
+        data=[row] if row is not None else []
+    )
 
 
 class TestTierForPrice:
@@ -184,6 +213,115 @@ class TestHandleCheckoutSessionCompleted:
         assert payload["tier"] == "basic"
         assert "grandfathered_monthly_credits" not in payload
         assert "grandfathered_until" not in payload
+
+    # --- one live personal subscription per user (2026-09-10) ---
+
+    def test_replacing_a_live_subscription_cancels_the_old_one_at_stripe(self, monkeypatch):
+        """The row named sub_old (live) and a checkout for sub_new completed —
+        a race past the endpoint's 409, or a session created before it
+        shipped. The user paid for sub_new, so it becomes the plan; sub_old is
+        canceled at Stripe right away (prorated) instead of billing on with
+        nothing in the DB naming it."""
+        monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+        from subscriptions import stripe_events
+
+        sb = _mock_supabase()
+        _row_read(
+            sb,
+            {"tier": "basic", "stripe_subscription_id": "sub_old", "stripe_customer_id": "cus_old", "status": "active"},
+        )
+        event = _checkout_session_event(subscription_id="sub_new", customer_id="cus_new")
+
+        def _cancel(sub_id, **params):
+            # Ordering is load-bearing: the row must already name sub_new when
+            # the `deleted` event Stripe fires for sub_old arrives, so that
+            # event hits the id-guard instead of freeing the new plan.
+            assert sb.table("subscriptions").upsert.called
+            return MagicMock()
+
+        with (
+            patch("stripe.Subscription.retrieve", return_value=_fake_stripe_subscription()),
+            patch("stripe.Subscription.cancel", side_effect=_cancel) as cancel,
+        ):
+            stripe_events.handle_checkout_session_completed(event, sb)
+
+        assert sb.table("subscriptions").upsert.call_args[0][0]["stripe_subscription_id"] == "sub_new"
+        cancel.assert_called_once_with("sub_old", prorate=True)
+
+    def test_same_subscription_redelivered_cancels_nothing(self, monkeypatch):
+        monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+        from subscriptions import stripe_events
+
+        sb = _mock_supabase()
+        _row_read(sb, {"tier": "basic", "stripe_subscription_id": "sub_123", "status": "active"})
+        event = _checkout_session_event(subscription_id="sub_123")
+
+        with (
+            patch("stripe.Subscription.retrieve", return_value=_fake_stripe_subscription()),
+            patch("stripe.Subscription.cancel") as cancel,
+        ):
+            stripe_events.handle_checkout_session_completed(event, sb)
+
+        cancel.assert_not_called()
+        assert sb.table("subscriptions").upsert.called
+
+    def test_replacing_a_canceled_subscription_cancels_nothing(self, monkeypatch):
+        """A canceled row is not live (a lost `deleted` webhook left the id behind)."""
+        monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+        from subscriptions import stripe_events
+
+        sb = _mock_supabase()
+        _row_read(sb, {"tier": "free", "stripe_subscription_id": "sub_dead", "status": "canceled"})
+        event = _checkout_session_event(subscription_id="sub_new")
+
+        with (
+            patch("stripe.Subscription.retrieve", return_value=_fake_stripe_subscription()),
+            patch("stripe.Subscription.cancel") as cancel,
+        ):
+            stripe_events.handle_checkout_session_completed(event, sb)
+
+        cancel.assert_not_called()
+        assert sb.table("subscriptions").upsert.call_args[0][0]["stripe_subscription_id"] == "sub_new"
+
+    def test_old_subscription_already_gone_is_not_an_error(self, monkeypatch):
+        """Stripe refusing the cancel (already canceled / no such id) IS the goal
+        state — log it, ack the event; a 500 here would make Stripe retry a
+        handler whose real work (the upsert) is already done."""
+        monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+        from subscriptions import stripe_events
+
+        sb = _mock_supabase()
+        _row_read(sb, {"tier": "basic", "stripe_subscription_id": "sub_old", "status": "active"})
+        event = _checkout_session_event(subscription_id="sub_new")
+
+        with (
+            patch("stripe.Subscription.retrieve", return_value=_fake_stripe_subscription()),
+            patch(
+                "stripe.Subscription.cancel",
+                side_effect=stripe.InvalidRequestError("No such subscription: 'sub_old'", "id"),
+            ),
+        ):
+            stripe_events.handle_checkout_session_completed(event, sb)  # no raise
+
+        assert sb.table("subscriptions").upsert.call_args[0][0]["stripe_subscription_id"] == "sub_new"
+
+    def test_stripe_outage_during_the_cancel_propagates_so_stripe_retries(self, monkeypatch):
+        """Anything but "already gone" must 500 the webhook: the upsert and the
+        wallet alignment are idempotent, so a retry is safe, and a swallowed
+        outage would leave sub_old billing with only a log line to show for it."""
+        monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+        from subscriptions import stripe_events
+
+        sb = _mock_supabase()
+        _row_read(sb, {"tier": "basic", "stripe_subscription_id": "sub_old", "status": "active"})
+        event = _checkout_session_event(subscription_id="sub_new")
+
+        with (
+            patch("stripe.Subscription.retrieve", return_value=_fake_stripe_subscription()),
+            patch("stripe.Subscription.cancel", side_effect=stripe.APIConnectionError("down")),
+            pytest.raises(stripe.APIConnectionError),
+        ):
+            stripe_events.handle_checkout_session_completed(event, sb)
 
 
 class TestAlignWalletToCheckoutGrandfather:
@@ -420,6 +558,157 @@ class TestHandleSubscriptionUpdated:
         assert "grandfathered_monthly_credits" not in payload
         assert "grandfathered_until" not in payload
 
+    def test_flexible_billing_cancel_at_reads_as_scheduled_to_end(self, monkeypatch):
+        """Stripe's flexible billing mode reports a Portal cancel as
+        cancel_at_period_end=false + cancel_at=<period end> (classic mode, which
+        the pinned API version still is, sets both). The profile's "Ends <date>"
+        keys entirely on the stored flag, so either shape must set it."""
+        monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+        from subscriptions import stripe_events
+
+        sb = _mock_supabase()
+        event = _subscription_event(
+            "customer.subscription.updated", status="active", cancel_at_period_end=False, cancel_at=1702592000
+        )
+
+        stripe_events.handle_subscription_updated(event, sb)
+
+        payload = sb.table("subscriptions").update.call_args[0][0]
+        assert payload["cancel_at_period_end"] is True
+
+    def test_renewed_plan_clears_the_flag(self, monkeypatch):
+        """Portal "Renew plan": both cancel fields come back null/false."""
+        monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+        from subscriptions import stripe_events
+
+        sb = _mock_supabase()
+        event = _subscription_event("customer.subscription.updated", status="active", cancel_at_period_end=False)
+
+        stripe_events.handle_subscription_updated(event, sb)
+
+        payload = sb.table("subscriptions").update.call_args[0][0]
+        assert payload["cancel_at_period_end"] is False
+
+
+class TestScheduledToEnd:
+    @pytest.mark.parametrize(
+        ("cancel_at_period_end", "cancel_at", "expected"),
+        [
+            pytest.param(True, None, True, id="classic-flag"),
+            pytest.param(False, 1702592000, True, id="flexible-cancel-at"),
+            pytest.param(True, 1702592000, True, id="both"),
+            pytest.param(False, None, False, id="neither"),
+            pytest.param(False, "1702592000", False, id="cancel-at-must-be-a-timestamp"),
+        ],
+    )
+    def test_reads_either_stripe_shape(self, cancel_at_period_end, cancel_at, expected):
+        from subscriptions.stripe_events import _scheduled_to_end
+
+        sub = MagicMock(cancel_at_period_end=cancel_at_period_end, cancel_at=cancel_at)
+        assert _scheduled_to_end(sub) is expected
+
+    def test_unconfigured_mock_attribute_is_not_a_cancel(self):
+        """The isinstance check is the live contract (Stripe sends an int or
+        null) and keeps bare-MagicMock fixtures honest."""
+        from subscriptions.stripe_events import _scheduled_to_end
+
+        sub = MagicMock(cancel_at_period_end=False)  # .cancel_at is an auto MagicMock
+        assert _scheduled_to_end(sub) is False
+
+    def test_real_stripe_object_without_cancel_at(self):
+        from subscriptions.stripe_events import _scheduled_to_end
+
+        sub = stripe.Subscription.construct_from(
+            {"id": "sub_1", "object": "subscription", "cancel_at_period_end": False}, "sk_test_x"
+        )
+        assert _scheduled_to_end(sub) is False
+        sub = stripe.Subscription.construct_from(
+            {"id": "sub_1", "object": "subscription", "cancel_at_period_end": False, "cancel_at": 1702592000},
+            "sk_test_x",
+        )
+        assert _scheduled_to_end(sub) is True
+
+
+class TestSyncPeriodFromStripe:
+    """The row mirror behind the Portal cancel deep-link and
+    `POST /billing/sync-subscription`: a live subscription's period and cancel
+    fields, written from Stripe when the webhook is late or lost."""
+
+    @staticmethod
+    def _sub(**overrides):
+        data = {
+            "id": "sub_123",
+            "object": "subscription",
+            "status": "active",
+            "cancel_at_period_end": True,
+            "cancel_at": 1702592000,
+            "current_period_start": 1700000000,
+            "current_period_end": 1702592000,
+            "canceled_at": 1702585200,
+        }
+        data.update(overrides)
+        return stripe.Subscription.construct_from(data, "sk_test_x")
+
+    @staticmethod
+    def _recording(sb):
+        b = MockQueryBuilder()
+        b.update = MagicMock(return_value=b)
+        b.eq = MagicMock(return_value=b)
+        sb.table.return_value = b
+        return b
+
+    def test_writes_the_fields_the_updated_handler_would(self):
+        from subscriptions.stripe_events import sync_period_from_stripe
+
+        sb = _mock_supabase()
+        b = self._recording(sb)
+
+        assert sync_period_from_stripe(sb, TEST_USER_ID, self._sub()) is True
+
+        sb.table.assert_called_once_with("subscriptions")
+        b.update.assert_called_once_with(
+            {
+                "cancel_at_period_end": True,
+                "current_period_start": "2023-11-14T22:13:20+00:00",
+                "current_period_end": "2023-12-14T22:13:20+00:00",
+                "canceled_at": "2023-12-14T20:20:00+00:00",
+            }
+        )
+        assert [c.args for c in b.eq.call_args_list] == [
+            ("user_id", TEST_USER_ID),
+            ("stripe_subscription_id", "sub_123"),
+        ]
+        b.execute.assert_called_once()
+
+    def test_flexible_billing_shape_counts_as_scheduled(self):
+        from subscriptions.stripe_events import sync_period_from_stripe
+
+        sb = _mock_supabase()
+        b = self._recording(sb)
+        assert sync_period_from_stripe(sb, TEST_USER_ID, self._sub(cancel_at_period_end=False)) is True
+        assert b.update.call_args.args[0]["cancel_at_period_end"] is True
+
+    def test_a_renewed_subscription_is_mirrored_too(self):
+        """ "Renew plan" on the Portal home clears the cancel; the row must
+        follow without waiting on the webhook."""
+        from subscriptions.stripe_events import sync_period_from_stripe
+
+        sb = _mock_supabase()
+        b = self._recording(sb)
+        sub = self._sub(cancel_at_period_end=False, cancel_at=None, canceled_at=None)
+        assert sync_period_from_stripe(sb, TEST_USER_ID, sub) is False
+        b.update.assert_called_once_with(
+            {
+                "cancel_at_period_end": False,
+                "current_period_start": "2023-11-14T22:13:20+00:00",
+                "current_period_end": "2023-12-14T22:13:20+00:00",
+                "canceled_at": None,
+            }
+        )
+        # Never status, tier or credits — those stay with the webhook handlers.
+        assert "status" not in b.update.call_args.args[0]
+        assert "tier" not in b.update.call_args.args[0]
+
 
 class TestHandleSubscriptionDeleted:
     def test_sets_tier_free_and_clears_stripe_ids(self):
@@ -511,6 +800,150 @@ class TestHandleInvoicePaymentFailed:
         with patch("stripe.Subscription.retrieve", return_value=fake_sub):
             stripe_events.handle_invoice_payment_failed(event, sb)
         sb.table.assert_not_called()
+
+
+class TestNamesOtherLiveSubscription:
+    """The one predicate behind every id-guard (2026-09-10)."""
+
+    @pytest.mark.parametrize(
+        "row, sub_id, expected",
+        [
+            ({"stripe_subscription_id": "sub_a", "status": "active"}, "sub_b", True),
+            ({"stripe_subscription_id": "sub_a", "status": "past_due"}, "sub_b", True),
+            ({"stripe_subscription_id": "sub_a", "status": "trialing"}, "sub_b", True),
+            ({"stripe_subscription_id": "sub_a", "status": "active"}, "sub_a", False),  # the same one
+            ({"stripe_subscription_id": "sub_a", "status": "canceled"}, "sub_b", False),  # stale id, not live
+            ({"stripe_subscription_id": None, "status": "active"}, "sub_b", False),  # names none
+            ({"stripe_subscription_id": "", "status": "active"}, "sub_b", False),
+            ({"tier": "basic"}, "sub_b", False),  # column not selected
+            (None, "sub_b", False),  # no row
+            (MagicMock(), "sub_b", False),  # an unconfigured test double is never a live row
+        ],
+    )
+    def test_predicate(self, row, sub_id, expected):
+        from subscriptions.stripe_events import _names_other_live_subscription
+
+        assert _names_other_live_subscription(row, sub_id) is expected
+
+
+class TestForeignSubscriptionEventsAreIgnored:
+    """One personal subscription per user (2026-09-10). Once the row names a
+    subscription, events for any OTHER not-canceled one must not touch it.
+    The money case: a duplicate the user (or ops) cancels in the portal —
+    its `deleted` event used to free the plan they are actually paying for.
+    A row naming nothing, or naming a canceled subscription, keeps today's
+    permissive behaviour (dashboard-created subscriptions, out-of-order
+    delivery before checkout.session.completed)."""
+
+    def test_updated_for_a_subscription_the_row_does_not_name_is_ignored(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_MONTHLY", "price_pro_monthly")
+        from subscriptions import stripe_events
+
+        sb = _mock_supabase()
+        _row_read(sb, {"tier": "basic", "stripe_subscription_id": "sub_current", "status": "active"})
+        # A stale Pro event: without the guard this would ALSO fire the upgrade top-up.
+        event = _subscription_event(
+            "customer.subscription.updated", subscription_id="sub_stale", price_id="price_pro_monthly"
+        )
+
+        stripe_events.handle_subscription_updated(event, sb)
+
+        sb.table("subscriptions").update.assert_not_called()
+        sb.rpc.assert_not_called()
+
+    def test_updated_for_the_named_subscription_still_syncs(self, monkeypatch):
+        monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+        from subscriptions import stripe_events
+
+        sb = _mock_supabase()
+        _row_read(sb, {"tier": "basic", "stripe_subscription_id": "sub_123", "status": "active"})
+        event = _subscription_event(
+            "customer.subscription.updated", subscription_id="sub_123", cancel_at_period_end=True
+        )
+
+        stripe_events.handle_subscription_updated(event, sb)
+
+        assert sb.table("subscriptions").update.call_args[0][0]["cancel_at_period_end"] is True
+
+    def test_updated_when_the_named_subscription_is_canceled_syncs_the_new_one(self, monkeypatch):
+        """A canceled row is not live: a lost `deleted` webhook must not lock the row forever."""
+        monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+        from subscriptions import stripe_events
+
+        sb = _mock_supabase()
+        _row_read(sb, {"tier": "free", "stripe_subscription_id": "sub_dead", "status": "canceled"})
+        event = _subscription_event("customer.subscription.updated", subscription_id="sub_new")
+
+        stripe_events.handle_subscription_updated(event, sb)
+
+        sb.table("subscriptions").update.assert_called_once()
+
+    def test_deleted_for_a_replaced_subscription_leaves_the_row_alone(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        from subscriptions import stripe_events
+
+        sb = _mock_supabase()
+        _row_read(sb, {"stripe_subscription_id": "sub_new", "status": "active", "stripe_customer_id": "cus_1"})
+        event = _subscription_event("customer.subscription.deleted", subscription_id="sub_old", status="canceled")
+
+        with (
+            patch("subscriptions.stripe_events.analytics_capture") as capture,
+            patch("subscriptions.overage_billing.bill_pending_overage") as bpo,
+        ):
+            stripe_events.handle_subscription_deleted(event, sb)
+
+        sb.table("subscriptions").update.assert_not_called()
+        capture.assert_not_called()  # no subscription_canceled — nothing was canceled for this user
+        bpo.assert_not_called()  # they still have a live plan; the sweep still covers them
+
+    def test_deleted_for_the_named_subscription_still_frees_the_row(self, monkeypatch):
+        monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+        from subscriptions import stripe_events
+
+        sb = _mock_supabase()
+        _row_read(sb, {"stripe_subscription_id": "sub_123", "status": "active", "stripe_customer_id": "cus_1"})
+        event = _subscription_event("customer.subscription.deleted", subscription_id="sub_123", status="canceled")
+
+        stripe_events.handle_subscription_deleted(event, sb)
+
+        payload = sb.table("subscriptions").update.call_args[0][0]
+        assert payload["tier"] == "free"
+        assert payload["stripe_subscription_id"] is None
+
+    def test_payment_failed_on_a_replaced_subscription_does_not_mark_past_due(self):
+        from subscriptions import stripe_events
+
+        sb = _mock_supabase()
+        _row_read(sb, {"stripe_subscription_id": "sub_new", "status": "active"})
+        event = MagicMock()
+        event.id = "evt_invoice_failed_orphan"
+        event.type = "invoice.payment_failed"
+        event.data.object.subscription = "sub_old"
+        fake_sub = MagicMock()
+        fake_sub.metadata = {"user_id": TEST_USER_ID}
+
+        with patch("stripe.Subscription.retrieve", return_value=fake_sub):
+            stripe_events.handle_invoice_payment_failed(event, sb)
+
+        sb.table("subscriptions").update.assert_not_called()
+
+    def test_payment_failed_on_the_named_subscription_marks_past_due(self):
+        from subscriptions import stripe_events
+
+        sb = _mock_supabase()
+        _row_read(sb, {"stripe_subscription_id": "sub_456", "status": "active"})
+        event = MagicMock()
+        event.id = "evt_invoice_failed_named"
+        event.type = "invoice.payment_failed"
+        event.data.object.subscription = "sub_456"
+        fake_sub = MagicMock()
+        fake_sub.metadata = {"user_id": TEST_USER_ID}
+
+        with patch("stripe.Subscription.retrieve", return_value=fake_sub):
+            stripe_events.handle_invoice_payment_failed(event, sb)
+
+        assert sb.table("subscriptions").update.call_args[0][0]["status"] == "past_due"
 
 
 class TestHandlersDispatcher:
@@ -943,3 +1376,40 @@ class TestRealStripeObjects:
             "topup_stripe_subscription_id": "sub_topup_real",
             "topup_admin_id": TEST_USER_ID,
         }
+
+    def test_deleted_id_guard_reads_a_real_subscription_object(self, monkeypatch):
+        """The id-guard (2026-09-10) reads `sub.id` and `sub.metadata` off the
+        event object. Attribute access works on StripeObject, but pin it on the
+        genuine shape next to the `.get()` regression this class exists for:
+        a foreign `deleted` leaves the row alone, the named one still frees it."""
+        monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+        from subscriptions import stripe_events
+
+        def _deleted(sub_id):
+            return self._event(
+                {
+                    "id": f"evt_real_deleted_{sub_id}",
+                    "type": "customer.subscription.deleted",
+                    "data": {
+                        "object": {
+                            "id": sub_id,
+                            "object": "subscription",
+                            "status": "canceled",
+                            "customer": "cus_real",
+                            "canceled_at": 1700000000,
+                            "cancel_at_period_end": False,
+                            "metadata": {"user_id": TEST_USER_ID},
+                        }
+                    },
+                }
+            )
+
+        sb = _mock_supabase()
+        _row_read(sb, {"stripe_subscription_id": "sub_keep", "status": "active", "stripe_customer_id": "cus_real"})
+        stripe_events.handle_subscription_deleted(_deleted("sub_gone"), sb)
+        sb.table("subscriptions").update.assert_not_called()
+
+        sb = _mock_supabase()
+        _row_read(sb, {"stripe_subscription_id": "sub_gone", "status": "active", "stripe_customer_id": "cus_real"})
+        stripe_events.handle_subscription_deleted(_deleted("sub_gone"), sb)
+        assert sb.table("subscriptions").update.call_args[0][0]["tier"] == "free"
