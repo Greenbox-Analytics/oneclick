@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { apiFetch, API_URL } from "@/lib/apiFetch";
+import { apiFetch, API_URL, ApiError } from "@/lib/apiFetch";
+import { clearPendingPlan } from "@/lib/pendingPlan";
 import { useAuth } from "@/contexts/AuthContext";
 
 /**
@@ -39,14 +40,30 @@ export function useCreateCheckoutSession() {
 }
 
 /**
+ * Which Customer Portal surface to open: the home (no args) or a deep-linked
+ * flow. `subscription_cancel` is Stripe's cancel confirmation page with the
+ * navigation hidden; it redirects to /profile?portal=canceled the moment the
+ * user confirms — the only Portal surface that redirects on its own.
+ */
+export interface PortalArgs {
+  flow?: "subscription_cancel";
+}
+
+/**
  * Create a Stripe Customer Portal Session and return the URL to redirect to.
- * Throws (404-shaped ApiError) if the user has no stripe_customer_id.
+ * Throws (404-shaped ApiError) if the user has no stripe_customer_id; the
+ * cancel flow also throws 409 (nothing to cancel / already ending) and 502
+ * (Stripe refused the flow).
  */
 export function useCreatePortalSession() {
-  return useMutation<string, Error, void>({
-    mutationFn: async () => {
+  return useMutation<string, Error, PortalArgs | void>({
+    mutationFn: async (args) => {
+      // `void` lets callers omit the argument; narrow it before reading.
+      const flow = (args as PortalArgs | undefined)?.flow;
       const res = await apiFetch(`${API_URL}/billing/create-portal-session`, {
         method: "POST",
+        // A body only for a flow: the home session sends nothing, as it always has.
+        ...(flow ? { body: JSON.stringify({ flow }) } : {}),
       });
       return (res as { url: string }).url;
     },
@@ -69,6 +86,95 @@ export function useOpenBillingPortal() {
     }
   };
   return { openPortal, isPending };
+}
+
+/**
+ * "Cancel plan" click handler: opens the Portal's cancel FLOW (see PortalArgs).
+ * A 409 means the card was stale — nothing to cancel, or already set to end —
+ * so refetch entitlements and say why, no portal. Any other refusal (Stripe
+ * rejecting the flow, a Portal configuration with cancellation off) falls back
+ * to the Portal home, where "Cancel plan" still exists: the feature degrades,
+ * it never dead-ends.
+ */
+export function useOpenCancelFlow() {
+  const qc = useQueryClient();
+  const { user } = useAuth();
+  const { mutateAsync: createPortal, isPending } = useCreatePortalSession();
+  const { openPortal } = useOpenBillingPortal();
+  const openCancelFlow = async () => {
+    try {
+      const url = await createPortal({ flow: "subscription_cancel" });
+      window.location.href = url;
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        qc.invalidateQueries({ queryKey: ["entitlements", user?.id] });
+        toast.info(e.message, { id: "cancel-flow" });
+        return;
+      }
+      if (e instanceof ApiError && e.status === 404) {
+        toast.error("No billing portal on file. For billing, contact support.", { id: "cancel-flow" });
+        return;
+      }
+      toast.info("Couldn't open the cancel page — opening your billing portal instead.", { id: "cancel-flow" });
+      await openPortal();
+    }
+  };
+  return { openCancelFlow, isPending };
+}
+
+/**
+ * Ask the backend to mirror the user's live subscription from Stripe onto
+ * their row (cancel flag, period) and resolve once it has. Every Customer
+ * Portal return calls this (usePortalReturn) so the plan card is right within
+ * one round trip instead of waiting on the `customer.subscription.updated`
+ * webhook — which still lands and writes the same truth. `{ synced: false }`
+ * means there was nothing live to mirror; a 502 means Stripe couldn't be read
+ * and the webhook is the fallback.
+ */
+export function useSyncSubscription() {
+  return useMutation<{ synced: boolean }, Error, void>({
+    mutationFn: () => apiFetch<{ synced: boolean }>(`${API_URL}/billing/sync-subscription`, { method: "POST" }),
+  });
+}
+
+/**
+ * The 409 `create-checkout-session` returns when the user already holds a live
+ * subscription (one live personal subscription per user, 2026-09-10). Its
+ * structured detail is `{ code: "subscription_exists", reason, tier }`.
+ */
+export function isSubscriptionConflict(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    err.status === 409 &&
+    (err.detail as { code?: unknown } | null | undefined)?.code === "subscription_exists"
+  );
+}
+
+/**
+ * Shared recovery for every checkout caller (Pricing, Onboarding, the
+ * dashboard's resume strip, Billing's plan card). The endpoint refused a
+ * second subscription; the caller's entitlements were simply stale (a second
+ * tab, the 60s cache, a degraded read). So: forget any remembered plan (a
+ * "Finish upgrading" nudge would only 409 again), refetch entitlements, say
+ * why, and take them to the Customer Portal — where plan changes for a
+ * subscriber actually happen. Resolves true when it handled the error:
+ *
+ *   catch (e) { if (await handleConflict(e)) return; toast.error(...); }
+ */
+export function useSubscriptionConflict(): (err: unknown) => Promise<boolean> {
+  const qc = useQueryClient();
+  const { user } = useAuth();
+  const { openPortal } = useOpenBillingPortal();
+  return async (err) => {
+    if (!isSubscriptionConflict(err)) return false;
+    clearPendingPlan(user?.id);
+    qc.invalidateQueries({ queryKey: ["entitlements", user?.id] });
+    toast.info("You already have an active subscription — change plans from your billing portal.", {
+      id: "subscription-exists",
+    });
+    await openPortal();
+    return true;
+  };
 }
 
 /**

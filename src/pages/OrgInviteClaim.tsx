@@ -8,7 +8,7 @@
 // (src/hooks/useOrgs.ts) don't auto-toast on error like this file's other
 // hooks — this page owns the distinct expired/wrong-email/not-found copy.
 import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { Loader2, Building2, ShieldAlert } from "lucide-react";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,16 @@ import { useAuth } from "@/contexts/AuthContext";
 import { ApiError } from "@/lib/apiFetch";
 import { useAcceptOrgInvite, useDeclineOrgInvite, useOrgInvitePreview } from "@/hooks/useOrgs";
 import { orgNoun } from "@/lib/tiers";
-import { clearPendingInvite, stashPendingInvite } from "@/lib/pendingInvite";
+import {
+  clearPendingInvite,
+  normalizeInviteEmail,
+  readPendingInvite,
+  stashPendingInvite,
+  type AuthInviteState,
+  type AuthTab,
+} from "@/lib/pendingInvite";
+
+const authPath = (invitePath: string) => `/auth?redirect=${encodeURIComponent(invitePath)}`;
 
 const Shell = ({ children }: { children: React.ReactNode }) => (
   <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-secondary to-background p-4">
@@ -30,13 +39,26 @@ const Shell = ({ children }: { children: React.ReactNode }) => (
  * accept and decline endpoints require auth, so neither fires until the user
  * is signed in (same idiom as InviteClaim.tsx's SignedOut).
  */
-const SignedOut = ({ invitePath, token }: { invitePath: string; token: string }) => {
+const SignedOut = ({
+  invitePath,
+  token,
+  email,
+  tab,
+}: {
+  invitePath: string;
+  token: string;
+  email: string | null;
+  tab: AuthTab;
+}) => {
   const navigate = useNavigate();
   // Remember the invite before the auth detour so a new signup's onboarding
   // knows a team is waiting (Google OAuth round-trips keep sessionStorage).
+  // The email rides along so /auth can prefill it after a reload too.
   useEffect(() => {
-    stashPendingInvite({ token, accepted: false });
-  }, [token]);
+    stashPendingInvite({ token, accepted: false, email });
+  }, [token, email]);
+  // The prefill hint goes to /auth in router STATE, never the URL.
+  const state: AuthInviteState = { email, tab };
   return (
     <Shell>
       <Card>
@@ -50,7 +72,7 @@ const SignedOut = ({ invitePath, token }: { invitePath: string; token: string })
           </CardDescription>
         </CardHeader>
         <CardFooter>
-          <Button className="w-full" onClick={() => navigate(`/auth?redirect=${encodeURIComponent(invitePath)}`)}>
+          <Button className="w-full" onClick={() => navigate(authPath(invitePath), { state })}>
             Sign in / Create account
           </Button>
         </CardFooter>
@@ -88,7 +110,7 @@ type ErrorKind = "expired" | "invalid" | "wrong_email" | "not_found";
  * Authenticated body. Only mounted once `user` exists (the route itself
  * handles the signed-out bounce below) — there's no preview fetch to guard.
  */
-const OrgInviteClaimAuthed = ({ token }: { token: string }) => {
+const OrgInviteClaimAuthed = ({ token, email }: { token: string; email: string | null }) => {
   const navigate = useNavigate();
   const { signOut } = useAuth();
   const acceptInvite = useAcceptOrgInvite();
@@ -152,14 +174,23 @@ const OrgInviteClaimAuthed = ({ token }: { token: string }) => {
     return (
       <CenteredMessage
         title="Wrong account"
-        description="This invite was sent to a different email address. Sign in with that account to accept it."
+        description={
+          email
+            ? `This invite was sent to ${email}. Sign in with that account to accept it.`
+            : "This invite was sent to a different email address. Sign in with that account to accept it."
+        }
         action={
           <Button
             variant="outline"
             className="w-full"
             onClick={async () => {
+              // Stash BEFORE signing out: once the session clears, the
+              // signed-out gate re-mounts and re-stashes, so every write
+              // must carry the same email or the prefill is lost.
+              stashPendingInvite({ token, accepted: false, email });
               await signOut();
-              navigate(`/auth?redirect=${encodeURIComponent(`/orgs/invite/${token}`)}`);
+              const state: AuthInviteState = { email, tab: "signin" };
+              navigate(authPath(`/orgs/invite/${token}`), { state });
             }}
           >
             Sign out
@@ -252,6 +283,36 @@ const OrgInviteClaimAuthed = ({ token }: { token: string }) => {
 const OrgInviteClaim = () => {
   const { token } = useParams<{ token: string }>();
   const { user, loading } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // The emailed link carries `?email=<invitee>&signup=1` (orgs/emails.py) so
+  // /auth can prefill the address and open the right tab. Latch both on
+  // mount, then scrub them from the address bar (`replace`, so Back/refresh
+  // don't resurrect them) — done HERE, above the auth gate, so it runs for
+  // signed-out and already-signed-in arrivals alike. The Google OAuth
+  // landing comes back without the params, so the session stash (written
+  // by the signed-out gate) is the fallback. Neither value is trusted by
+  // the server: accept still matches the signed-in account to the invite.
+  const [hint] = useState(() => ({
+    email: normalizeInviteEmail(searchParams.get("email")),
+    signup: searchParams.get("signup") === "1",
+  }));
+  const [stashed] = useState(() => readPendingInvite());
+  const hadParams = searchParams.has("email") || searchParams.has("signup");
+  useEffect(() => {
+    if (!hadParams) return;
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("email");
+        next.delete("signup");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [hadParams, setSearchParams]);
+  const inviteEmail = hint.email ?? (stashed && stashed.token === token ? stashed.email ?? null : null);
+  const authTab: AuthTab = hint.signup ? "signup" : "signin";
 
   if (!token) {
     return (
@@ -279,10 +340,10 @@ const OrgInviteClaim = () => {
   // through /auth with a redirect back to this exact invite link, same
   // pattern as the registry collaborator invite claim (InviteClaim.tsx).
   if (!user) {
-    return <SignedOut invitePath={`/orgs/invite/${token}`} token={token} />;
+    return <SignedOut invitePath={`/orgs/invite/${token}`} token={token} email={inviteEmail} tab={authTab} />;
   }
 
-  return <OrgInviteClaimAuthed token={token} />;
+  return <OrgInviteClaimAuthed token={token} email={inviteEmail} />;
 };
 
 export default OrgInviteClaim;

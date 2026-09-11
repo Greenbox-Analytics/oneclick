@@ -168,6 +168,79 @@ def _plain(obj):
     return json.loads(str(obj)) if isinstance(obj, stripe.StripeObject) else obj
 
 
+def _names_other_live_subscription(row, sub_id) -> bool:
+    """True when the stored subscriptions row points at a DIFFERENT, not-canceled
+    subscription than `sub_id` — i.e. this event belongs to a duplicate/orphan.
+
+    ONE personal subscription per user (2026-09-10): once the row names a
+    subscription, events for any OTHER live one must not touch it. The money
+    case is a duplicate the user (or ops) cancels in the portal: its `deleted`
+    event used to free the plan they are actually paying for. Everything the
+    row does NOT pin down stays permissive on purpose — no row, id NULL, or a
+    canceled status (a lost `deleted` webhook left the id behind) — so
+    dashboard-created subscriptions and out-of-order delivery ahead of
+    checkout.session.completed keep working exactly as before.
+
+    The type checks are the live-data contract (PostgREST hands back str/None)
+    and also keep test doubles honest: an unconfigured MagicMock row is never
+    a live subscription.
+    """
+    if not isinstance(row, dict):
+        return False
+    stored = row.get("stripe_subscription_id")
+    if not isinstance(stored, str) or not stored:
+        return False
+    return stored != sub_id and row.get("status") != "canceled"
+
+
+def _scheduled_to_end(sub) -> bool:
+    """Is this subscription set to end at the close of its period?
+
+    Classic billing mode (what the pinned API version speaks) reports a Portal
+    cancel as `cancel_at_period_end=True`; Stripe's flexible mode leaves that
+    False and sets `cancel_at` to the period end instead. The profile's
+    "Ends <date>" keys entirely on the stored flag, so read both shapes.
+    `cancel_at` must be a real timestamp: the live contract (int or null), and
+    what keeps a bare-MagicMock attribute from reading as a cancel.
+    """
+    return bool(sub.cancel_at_period_end) or isinstance(getattr(sub, "cancel_at", None), int)
+
+
+def sync_period_from_stripe(supabase, user_id: str, sub) -> bool:
+    """Mirror a LIVE subscription's period and cancel fields from Stripe onto
+    the user's row. Returns whether it is set to end at period end.
+
+    The row lags every Stripe change by a webhook — or misses it entirely when
+    the listener is down — so the surfaces that need the truth NOW read the
+    subscription from Stripe and call this: the Portal cancel deep-link (a
+    stale "renews" would open a cancel flow Stripe refuses, "already set to be
+    canceled at period end") and `POST /billing/sync-subscription`, which
+    every Portal return calls so the plan card flips without waiting on the
+    webhook. Writes only the fields `handle_subscription_updated` would write
+    for these — never status, tier or credits, which stay with the handlers —
+    conditioned on the row still naming this subscription, so it converges
+    with the webhook whichever lands first. Callers keep a subscription Stripe
+    reports canceled away from here: freeing the plan (tier, grandfathering,
+    analytics) is `handle_subscription_deleted`'s job.
+    """
+    scheduled = _scheduled_to_end(sub)
+    (
+        supabase.table("subscriptions")
+        .update(
+            {
+                "cancel_at_period_end": scheduled,
+                "current_period_start": _ts(sub.current_period_start),
+                "current_period_end": _ts(sub.current_period_end),
+                "canceled_at": _ts(sub.canceled_at) if sub.canceled_at else None,
+            }
+        )
+        .eq("user_id", user_id)
+        .eq("stripe_subscription_id", sub.id)
+        .execute()
+    )
+    return scheduled
+
+
 def _subscription_metadata(invoice) -> dict:
     """The Subscription metadata Stripe copies onto EVERY invoice of that
     subscription (`invoice.subscription_details.metadata`).
@@ -233,10 +306,14 @@ def handle_checkout_session_completed(event, supabase) -> None:
     # nothing to compare against or clear.
     prev_res = (
         supabase.table("subscriptions")
-        .select("tier, grandfathered_monthly_credits, grandfathered_until")
+        .select(
+            "tier, grandfathered_monthly_credits, grandfathered_until, "
+            "stripe_subscription_id, stripe_customer_id, status"
+        )
         .eq("user_id", user_id)
         .execute()
     )
+    prev_row = prev_res.data[0] if prev_res.data else None
     prev_tier = prev_res.data[0]["tier"] if prev_res.data else None
     prev_gf = prev_res.data[0].get("grandfathered_monthly_credits") if prev_res.data else None
     prev_gf_until = prev_res.data[0].get("grandfathered_until") if prev_res.data else None
@@ -258,6 +335,38 @@ def handle_checkout_session_completed(event, supabase) -> None:
         payload["grandfathered_until"] = None  # hygiene: clear the expiry alongside the grant
 
     supabase.table("subscriptions").upsert(payload, on_conflict="user_id").execute()
+
+    if _names_other_live_subscription(prev_row, subscription_id):
+        # A duplicate got through — a race past the checkout endpoint's 409,
+        # or a session created before it shipped. The user just PAID for this
+        # subscription, so it is the plan (upserted above); the one the row
+        # used to name would otherwise bill on with nothing pointing at it.
+        # Cancel it now, prorated: unused time becomes a Customer-balance
+        # credit — usable when both live on one Customer (which the endpoint's
+        # `customer=` reuse makes true going forward), stranded otherwise —
+        # hence the ERROR carrying both customers, for a manual refund.
+        # AFTER the upsert on purpose: the `deleted` event Stripe fires for
+        # the old subscription must find the row already naming the new one,
+        # so handle_subscription_deleted's id-guard skips it.
+        old_sub_id = prev_row["stripe_subscription_id"]
+        logger.error(
+            "checkout %s replaced live subscription %s (customer %s) with %s (customer %s) for user %s "
+            "— canceling the old one",
+            getattr(session, "id", "?"),
+            old_sub_id,
+            prev_row.get("stripe_customer_id"),
+            subscription_id,
+            customer_id,
+            user_id,
+        )
+        try:
+            stripe.Subscription.cancel(old_sub_id, prorate=True)
+        except stripe.InvalidRequestError as e:
+            # Already canceled / no such subscription: the goal state. Anything
+            # else propagates so the webhook 500s and Stripe retries — the
+            # upsert above and the wallet alignment below are idempotent.
+            logger.warning("superseded subscription %s could not be canceled (already gone?): %s", old_sub_id, e)
+
     analytics_capture(
         user_id, "subscription_activated", {"stripe_price_id": price_id, "status": sub.status, "tier": tier}
     )
@@ -578,7 +687,20 @@ def handle_subscription_updated(event, supabase) -> None:
     price_id = sub["items"]["data"][0]["price"]["id"]
     new_tier = _tier_for_price(price_id)
 
-    prev_res = supabase.table("subscriptions").select("tier").eq("user_id", user_id).execute()
+    prev_res = (
+        supabase.table("subscriptions").select("tier, stripe_subscription_id, status").eq("user_id", user_id).execute()
+    )
+    prev_row = prev_res.data[0] if prev_res.data else None
+    if _names_other_live_subscription(prev_row, sub.id):
+        # Before the update AND before the upgrade top-up below: a stale event
+        # for a duplicate must neither rewrite the real plan nor grant credits.
+        logger.warning(
+            "subscription.updated for %s ignored: user %s's row names live subscription %s",
+            sub.id,
+            user_id,
+            prev_row["stripe_subscription_id"],
+        )
+        return
     prev_tier = prev_res.data[0]["tier"] if prev_res.data else "free"
 
     from subscriptions.service import credits_enabled
@@ -588,7 +710,7 @@ def handle_subscription_updated(event, supabase) -> None:
         "stripe_price_id": price_id,
         "current_period_start": _ts(sub.current_period_start),
         "current_period_end": _ts(sub.current_period_end),
-        "cancel_at_period_end": sub.cancel_at_period_end,
+        "cancel_at_period_end": _scheduled_to_end(sub),
         "canceled_at": _ts(sub.canceled_at) if sub.canceled_at else None,
     }
     # Pre-credits, this handler never touched tier — gate the write so
@@ -662,6 +784,25 @@ def handle_subscription_deleted(event, supabase) -> None:
     if not user_id:
         return
 
+    row_res = (
+        supabase.table("subscriptions")
+        .select("stripe_subscription_id, status, stripe_customer_id")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    row = row_res.data[0] if row_res.data else None
+    if _names_other_live_subscription(row, sub.id):
+        # A duplicate/superseded subscription ending while the user's real
+        # plan lives on: nothing to reset, and no final billing either — they
+        # are still in the paid-tier sweep population.
+        logger.warning(
+            "subscription.deleted for %s ignored: user %s's row names live subscription %s",
+            sub.id,
+            user_id,
+            row["stripe_subscription_id"],
+        )
+        return
+
     supabase.table("subscriptions").update(
         {
             "tier": "free",
@@ -699,8 +840,7 @@ def handle_subscription_deleted(event, supabase) -> None:
 
         customer_id = getattr(sub, "customer", None)
         if not customer_id:
-            row = supabase.table("subscriptions").select("stripe_customer_id").eq("user_id", user_id).execute()
-            customer_id = row.data[0].get("stripe_customer_id") if row.data else None
+            customer_id = row.get("stripe_customer_id") if isinstance(row, dict) else None
         if customer_id:
             bill_pending_overage(supabase, user_id)
             wallet_res = (
@@ -724,6 +864,18 @@ def handle_invoice_payment_failed(event, supabase) -> None:
     sub = stripe.Subscription.retrieve(subscription_id)
     user_id = (_plain(sub.metadata) or {}).get("user_id")
     if not user_id:
+        return
+
+    row_res = supabase.table("subscriptions").select("stripe_subscription_id, status").eq("user_id", user_id).execute()
+    row = row_res.data[0] if row_res.data else None
+    if _names_other_live_subscription(row, subscription_id):
+        # A failed charge on a duplicate/orphan must not mark the real plan past due.
+        logger.warning(
+            "invoice.payment_failed on %s ignored: user %s's row names live subscription %s",
+            subscription_id,
+            user_id,
+            row["stripe_subscription_id"],
+        )
         return
 
     supabase.table("subscriptions").update(

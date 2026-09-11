@@ -1,18 +1,34 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Check, X, Music, ArrowLeft } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { useCreateCheckoutSession, type CheckoutPlan } from "@/hooks/useBilling";
+import {
+  useCreateCheckoutSession,
+  useOpenBillingPortal,
+  useSubscriptionConflict,
+  type CheckoutPlan,
+} from "@/hooks/useBilling";
+import { useEntitlements } from "@/hooks/useEntitlements";
 import { useAnalytics } from "@/hooks/useAnalytics";
-import { tierLabel, usd, annualPerMonth, ENTERPRISE_LABEL, TIER_PRICES, TEAM_STORAGE_OVERAGE_USD_PER_GB } from "@/lib/tiers";
+import { clearPendingPlan, stashPendingPlan } from "@/lib/pendingPlan";
+import {
+  hasLiveSubscription,
+  tierLabel,
+  usd,
+  annualPerMonth,
+  ENTERPRISE_LABEL,
+  TIER_PRICES,
+  TEAM_STORAGE_OVERAGE_USD_PER_GB,
+} from "@/lib/tiers";
 
 type Feature = { included: boolean; label: string };
 type Period = "monthly" | "annual";
+type PaidTier = "basic" | "pro";
 
 // ---------------------------------------------------------------------------
 // Credits model: every tool is open on every tier — AI actions draw from a
@@ -81,23 +97,37 @@ const FeatureItem = ({ included, label }: Feature) => (
 );
 
 /** Basic and Pro differ only in tier, blurb, features, and the "Most popular"
- * highlight — each card owns its own billing-period toggle and checkout call. */
+ * highlight — each card owns its own billing-period toggle and checkout call.
+ *
+ * `currentTier` is the paid tier a LIVE Stripe subscription puts the viewer
+ * on (null for everyone else — free, admin-granted, signed-out, degraded).
+ * A subscriber never starts a second Checkout from here: their own card reads
+ * "Current plan" and the other one switches through the Customer Portal.
+ * The backend refuses a second subscription anyway (409); handleConflict is
+ * the safety net for a stale read. */
 const PaidPlanCard = ({
   tier,
   description,
   features,
   highlight,
+  currentTier,
 }: {
-  tier: "basic" | "pro";
+  tier: PaidTier;
   description: string;
   features: Feature[];
   highlight?: boolean;
+  currentTier: PaidTier | null;
 }) => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [period, setPeriod] = useState<Period>("monthly");
   const { mutateAsync: createCheckout, isPending } = useCreateCheckoutSession();
+  const { openPortal, isPending: isOpeningPortal } = useOpenBillingPortal();
+  const handleConflict = useSubscriptionConflict();
   const { captureCheckoutStarted } = useAnalytics();
+
+  const isCurrent = currentTier === tier;
+  const isSwitch = currentTier !== null && !isCurrent;
 
   const handleClick = async () => {
     const planParam: CheckoutPlan = period === "annual" ? `${tier}_annual` : `${tier}_monthly`;
@@ -108,8 +138,12 @@ const PaidPlanCard = ({
     try {
       const url = await createCheckout(planParam);
       captureCheckoutStarted(period);
+      // Remember the choice so an abandoned checkout (Back, or a closed tab)
+      // can be finished from the dashboard or Billing later.
+      stashPendingPlan(user.id, planParam);
       window.location.href = url;
-    } catch {
+    } catch (e) {
+      if (await handleConflict(e)) return;
       toast.error("Couldn't start checkout. Try again or contact support.");
     }
   };
@@ -149,15 +183,36 @@ const PaidPlanCard = ({
           <FeatureItem key={f.label} {...f} />
         ))}
       </ul>
-      <Button
-        size="lg"
-        variant={highlight ? "default" : "outline"}
-        className="w-full"
-        onClick={handleClick}
-        disabled={isPending}
-      >
-        {isPending ? "Starting checkout…" : `Upgrade to ${tierLabel(tier)}`}
-      </Button>
+      {isCurrent ? (
+        <>
+          <Button size="lg" variant="outline" className="w-full" disabled>
+            Current plan
+          </Button>
+          <p className="text-xs text-muted-foreground text-center mt-3">
+            Change your billing period or plan from Manage subscription on your account page.
+          </p>
+        </>
+      ) : isSwitch ? (
+        <Button
+          size="lg"
+          variant={highlight ? "default" : "outline"}
+          className="w-full"
+          onClick={openPortal}
+          disabled={isOpeningPortal}
+        >
+          {isOpeningPortal ? "Opening billing portal…" : `Switch to ${tierLabel(tier)}`}
+        </Button>
+      ) : (
+        <Button
+          size="lg"
+          variant={highlight ? "default" : "outline"}
+          className="w-full"
+          onClick={handleClick}
+          disabled={isPending}
+        >
+          {isPending ? "Starting checkout…" : `Upgrade to ${tierLabel(tier)}`}
+        </Button>
+      )}
     </Card>
   );
 };
@@ -165,8 +220,40 @@ const PaidPlanCard = ({
 const Pricing = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { data: ent } = useEntitlements();
+
+  // Only a trustworthy read (not degraded) naming a live Stripe subscription
+  // changes the paid cards; for everything else the endpoint's 409 is the
+  // safety net. Public page: entitlements simply never load signed-out.
+  const currentTier: PaidTier | null =
+    ent && !ent.degraded && hasLiveSubscription(ent) && (ent.tier === "basic" || ent.tier === "pro") ? ent.tier : null;
+
+  // The backend's default cancel_url is /pricing?canceled=true. Handled HERE
+  // rather than in PaidPlanCard (two cards share the page — the toast would
+  // fire twice), and latched once at mount so stripping the param below
+  // can't re-run it.
+  const [canceled] = useState(() => searchParams.get("canceled") === "true");
+  useEffect(() => {
+    if (!canceled) return;
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("canceled");
+        return next;
+      },
+      { replace: true },
+    );
+    toast.info("Checkout cancelled — you haven't been charged. Pick a plan whenever you're ready.", {
+      id: "checkout-cancelled",
+    });
+    // Once per mount, keyed on the latch alone.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canceled]);
 
   const handleFreeClick = () => {
+    // An explicit Free choice ends any "finish upgrading" nudge.
+    if (user) clearPendingPlan(user.id);
     navigate(user ? "/dashboard" : "/auth");
   };
 
@@ -259,6 +346,7 @@ const Pricing = () => {
             description="For independent managers and serious creators"
             features={BASIC_FEATURES}
             highlight
+            currentTier={currentTier}
           />
 
           {/* Pro */}
@@ -266,6 +354,7 @@ const Pricing = () => {
             tier="pro"
             description="For power users and small teams"
             features={PRO_FEATURES}
+            currentTier={currentTier}
           />
 
           {/* Enterprise is never created in-app (owner decision, 2026-08-16) —

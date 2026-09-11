@@ -1,6 +1,8 @@
 """Billing router: Stripe Checkout, Portal, and webhook endpoints."""
 
+import logging
 import os
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, model_validator
@@ -9,6 +11,8 @@ import subscriptions.stripe_client as stripe_client_module
 import subscriptions.stripe_events as stripe_events_module
 from analytics import capture as analytics_capture
 from auth import get_current_user_email, get_current_user_id
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -54,6 +58,46 @@ async def create_checkout_session(
         raise HTTPException(status_code=400, detail=f"Invalid plan: {body.plan}")
     price_id = os.environ[env_key]
 
+    from main import get_supabase_client
+
+    sb = get_supabase_client()
+    # ONE live personal subscription per user (2026-09-10). Checkout always
+    # creates a NEW Stripe subscription, so letting a subscriber through here
+    # meant a second one billing alongside the first — and the webhook then
+    # overwrote stripe_subscription_id, orphaning the old one. Live = the row
+    # names a subscription AND it isn't canceled; past_due and trialing count
+    # (a past-due user fixes their card in the portal, they don't buy another
+    # plan). Plan changes for a subscriber go through the Customer Portal —
+    # the frontend opens it on this 409 (useSubscriptionConflict). An
+    # admin-granted paid tier has no subscription id and may buy like anyone.
+    sub_res = (
+        sb.table("subscriptions")
+        .select("stripe_customer_id, stripe_subscription_id, status, tier")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    row = sub_res.data[0] if sub_res.data else {}
+    if row.get("stripe_subscription_id") and row.get("status") != "canceled":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "subscription_exists",
+                "reason": (
+                    "You already have an active subscription. Change plans from Manage subscription in your account."
+                ),
+                "tier": row.get("tier"),
+            },
+        )
+    # Same customer-resolution block as the top-up paths: a re-subscriber
+    # after cancellation (handle_subscription_deleted keeps stripe_customer_id
+    # for exactly this) lands on the Customer that already carries their
+    # invoices — and any proration credit from a superseded subscription (see
+    # stripe_events.handle_checkout_session_completed) — instead of Checkout
+    # minting a fresh Customer per purchase.
+    customer_kwargs = (
+        {"customer": row["stripe_customer_id"]} if row.get("stripe_customer_id") else {"customer_email": email}
+    )
+
     frontend_url = os.environ["FRONTEND_URL"]
     success_path = _safe_return_path(body.success_path, "/profile?stripe_session_id={CHECKOUT_SESSION_ID}&welcome=true")
     cancel_path = _safe_return_path(body.cancel_path, "/pricing?canceled=true")
@@ -66,11 +110,11 @@ async def create_checkout_session(
     session = stripe.checkout.Session.create(
         mode="subscription",
         line_items=[{"price": price_id, "quantity": 1}],
-        customer_email=email,
         metadata={"user_id": user_id},
         subscription_data={"metadata": {"user_id": user_id}},
         success_url=success_url,
         cancel_url=cancel_url,
+        **customer_kwargs,
     )
     analytics_capture(user_id, "checkout_started", {"plan": body.plan})
     return {"url": session.url}
@@ -396,32 +440,160 @@ async def create_org_topup_checkout(
     return {"url": session.url}
 
 
+class PortalSessionRequest(BaseModel):
+    # None opens the Portal home. `subscription_cancel` deep-links into Stripe's
+    # cancel confirmation page for the user's live subscription (2026-09-10):
+    # only a Portal FLOW can redirect on its own afterwards — the home always
+    # needs a "Return to Msanii" click.
+    flow: Literal["subscription_cancel"] | None = None
+
+
+# The cancel flow's structured refusals; `useOpenCancelFlow` shows `reason`.
+_NOTHING_TO_CANCEL = {"code": "nothing_to_cancel", "reason": "There's no active subscription to cancel."}
+_ALREADY_CANCELING = {
+    "code": "already_canceling",
+    "reason": "Your subscription is already set to end at the close of this billing period.",
+}
+_PORTAL_FLOW_UNAVAILABLE = {"code": "portal_flow_unavailable", "reason": "Couldn't open the cancel page."}
+_STRIPE_UNAVAILABLE = {"code": "stripe_unavailable", "reason": "Couldn't reach Stripe."}
+
+
+def _live_at_stripe(stripe, user_id: str, sub_id: str):
+    """Stripe's own view of the row's subscription, or None when Stripe reports
+    it canceled — a missed `deleted` webhook; freeing the plan (tier,
+    grandfathering, analytics) stays that handler's job. Raises StripeError."""
+    live = stripe.Subscription.retrieve(sub_id)
+    if live.status == "canceled":
+        logger.warning(
+            "subscriptions row for user %s names %s, which Stripe reports canceled (deleted webhook missed?)",
+            user_id,
+            sub_id,
+        )
+        return None
+    return live
+
+
 @router.post("/create-portal-session")
 async def create_portal_session(
+    body: PortalSessionRequest | None = None,
     user_id: str = Depends(get_current_user_id),
 ):
     """Create a Stripe Customer Portal session; return redirect URL.
 
+    No body (or an empty one) opens the Portal home, whose "Return to Msanii"
+    link lands on `/profile?portal=return`. `{"flow": "subscription_cancel"}`
+    opens the cancel flow instead: Stripe redirects to `/profile?portal=canceled`
+    the moment the user confirms, and to the home return URL if they back out.
+
     Returns 404 if the user has no stripe_customer_id (e.g., manually-granted Pro
-    users with only a tier_overrides row).
+    users with only a tier_overrides row); 409 when the cancel flow has nothing
+    to cancel (no live subscription, or one already set to end — per Stripe,
+    not just the row); 502 when Stripe refuses the flow (a Portal configuration
+    with cancellation switched off) or the subscription can't be read.
     """
     from main import get_supabase_client
 
     sb = get_supabase_client()
-    sub_res = sb.table("subscriptions").select("stripe_customer_id").eq("user_id", user_id).execute()
-    if not sub_res.data or not sub_res.data[0].get("stripe_customer_id"):
+    sub_res = (
+        sb.table("subscriptions")
+        .select("stripe_customer_id, stripe_subscription_id, status, cancel_at_period_end")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    row = sub_res.data[0] if sub_res.data else {}
+    if not row.get("stripe_customer_id"):
         raise HTTPException(
             status_code=404,
             detail="No Stripe subscription on file. If you believe this is an error, contact support.",
         )
 
     frontend_url = os.environ["FRONTEND_URL"]
-    portal = stripe_client_module.get_stripe().billing_portal.Session.create(
-        customer=sub_res.data[0]["stripe_customer_id"],
-        return_url=f"{frontend_url}/subscription",
-    )
-    analytics_capture(user_id, "billing_portal_opened", {})
+    flow = body.flow if body else None
+    kwargs: dict = {
+        "customer": row["stripe_customer_id"],
+        # /profile refetches entitlements on this signal: a cancel or "Renew
+        # plan" made on the Portal home races its webhook just like Checkout.
+        "return_url": f"{frontend_url}/profile?portal=return",
+    }
+    stripe = stripe_client_module.get_stripe()
+    if flow == "subscription_cancel":
+        sub_id = row.get("stripe_subscription_id")
+        # Same "live" rule as create_checkout_session: an id AND not canceled.
+        if not (sub_id and row.get("status") != "canceled"):
+            raise HTTPException(status_code=409, detail=_NOTHING_TO_CANCEL)
+        if row.get("cancel_at_period_end"):
+            raise HTTPException(status_code=409, detail=_ALREADY_CANCELING)
+        # The row lags Stripe by a webhook, or misses it when the listener is
+        # down: a cancel already scheduled (on the Portal home, in the
+        # Dashboard, or through this very flow before its webhook landed) makes
+        # Stripe refuse a second flow. Ask Stripe before deep-linking, and heal
+        # the row when it disagrees so the refetch a 409 triggers flips the
+        # card to "Ends" instead of leaving a "Cancel plan" that can't work.
+        try:
+            live = _live_at_stripe(stripe, user_id, sub_id)
+        except stripe.StripeError as e:
+            logger.error("Portal %s flow: Stripe could not read %s for user %s: %s", flow, sub_id, user_id, e)
+            raise HTTPException(status_code=502, detail=_PORTAL_FLOW_UNAVAILABLE) from e
+        if live is None:
+            raise HTTPException(status_code=409, detail=_NOTHING_TO_CANCEL)
+        if stripe_events_module.sync_period_from_stripe(sb, user_id, live):
+            raise HTTPException(status_code=409, detail=_ALREADY_CANCELING)
+        kwargs["flow_data"] = {
+            "type": "subscription_cancel",
+            "subscription_cancel": {"subscription": sub_id},
+            "after_completion": {
+                "type": "redirect",
+                "redirect": {"return_url": f"{frontend_url}/profile?portal=canceled"},
+            },
+        }
+
+    try:
+        portal = stripe.billing_portal.Session.create(**kwargs)
+    except stripe.StripeError as e:
+        if flow is None:
+            raise
+        # Stripe doesn't document what a Portal configuration with cancellation
+        # switched off does here. Name it for ops; the frontend falls back to
+        # the Portal home, where "Cancel plan" still exists.
+        logger.error("Portal %s flow refused by Stripe for user %s: %s", flow, user_id, e)
+        raise HTTPException(status_code=502, detail=_PORTAL_FLOW_UNAVAILABLE) from e
+    analytics_capture(user_id, "billing_portal_opened", {"flow": flow or "home"})
     return {"url": portal.url}
+
+
+@router.post("/sync-subscription")
+async def sync_subscription(user_id: str = Depends(get_current_user_id)):
+    """Mirror the user's live subscription from Stripe onto their row.
+
+    Every Customer Portal return (`/profile?portal=…`) calls this, so the plan
+    card is right within one round trip: a cancel or a "Renew plan" made at
+    Stripe lands on the row now, whether or not its
+    `customer.subscription.updated` webhook has been delivered yet — the
+    webhook still writes the same truth when it arrives. Only the period and
+    cancel fields are mirrored; status, tier and credits stay with the webhook
+    handlers. `{"synced": false}` when the row names nothing live, or Stripe
+    reports the subscription canceled (the `deleted` handler's job); 502 when
+    Stripe can't be read, so the caller falls back to waiting on the webhook.
+    """
+    from main import get_supabase_client
+
+    sb = get_supabase_client()
+    res = sb.table("subscriptions").select("stripe_subscription_id, status").eq("user_id", user_id).execute()
+    row = res.data[0] if res.data else {}
+    sub_id = row.get("stripe_subscription_id")
+    if not sub_id or row.get("status") == "canceled":
+        return {"synced": False}
+
+    stripe = stripe_client_module.get_stripe()
+    try:
+        live = _live_at_stripe(stripe, user_id, sub_id)
+    except stripe.StripeError as e:
+        logger.error("sync-subscription: Stripe could not read %s for user %s: %s", sub_id, user_id, e)
+        raise HTTPException(status_code=502, detail=_STRIPE_UNAVAILABLE) from e
+    if live is None:
+        return {"synced": False}
+    stripe_events_module.sync_period_from_stripe(sb, user_id, live)
+    return {"synced": True}
 
 
 @router.post("/webhook")

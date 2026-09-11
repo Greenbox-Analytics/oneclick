@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { useAnalytics } from "@/hooks/useAnalytics";
-import { useCreateCheckoutSession } from "@/hooks/useBilling";
+import { useCreateCheckoutSession, useSubscriptionConflict, type CheckoutPlan } from "@/hooks/useBilling";
 import OnboardingProgress from "@/components/onboarding/OnboardingProgress";
 import StepWelcome from "@/components/onboarding/StepWelcome";
 import StepName from "@/components/onboarding/StepName";
@@ -15,6 +15,7 @@ import StepReady from "@/components/onboarding/StepReady";
 import StepTeamInvite from "@/components/onboarding/StepTeamInvite";
 import { markOnboardedCached } from "@/lib/onboardingCache";
 import { clearPendingInvite, orgInvitePath, readPendingInvite } from "@/lib/pendingInvite";
+import { clearPendingPlan, stashPendingPlan } from "@/lib/pendingPlan";
 import { useOrgInvitePreview } from "@/hooks/useOrgs";
 
 const TOTAL_STEPS = 5;
@@ -34,7 +35,15 @@ const Onboarding = () => {
   const { user } = useAuth();
   const { captureOnboardingStepCompleted, captureOnboardingFinished } = useAnalytics();
   const { mutateAsync: createCheckout } = useCreateCheckoutSession();
-  const [currentStep, setCurrentStep] = useState(0);
+  const handleConflict = useSubscriptionConflict();
+  // Returning from a cancelled Stripe Checkout (?upgrade=cancelled). Latched
+  // once at mount — stripping the param below must not re-run anything — and
+  // read by loadProfile: the profile was already saved as onboarded before
+  // the redirect (see handleChooseBasic), so the usual "already onboarded →
+  // /dashboard" bounce has to stand down on this visit or the user lands on
+  // the dashboard as Free with the plan step unreachable.
+  const [resumeAtPlan] = useState(() => searchParams.get("upgrade") === "cancelled");
+  const [currentStep, setCurrentStep] = useState(resumeAtPlan ? 3 : 0);
   const [checkingStatus, setCheckingStatus] = useState(true);
   const [finishing, setFinishing] = useState(false);
 
@@ -57,16 +66,24 @@ const Onboarding = () => {
     ? pendingInvite.kind ?? null
     : invitePreview.data?.kind ?? null;
 
-  // Returning from a cancelled Stripe Checkout — show toast, jump back to plan step.
-  // Profile was already saved before the redirect, so this is just resuming UI flow.
   useEffect(() => {
-    if (searchParams.get("upgrade") === "cancelled") {
-      toast.info("Checkout cancelled — you're on the Free plan. Upgrade anytime from Billing.");
-      setCurrentStep(3);
-      searchParams.delete("upgrade");
-      setSearchParams(searchParams, { replace: true });
-    }
-  }, [searchParams, setSearchParams]);
+    if (!resumeAtPlan) return;
+    // Strip the param (`replace`, so Back/refresh don't replay the toast);
+    // the step itself was seeded from the latch above.
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("upgrade");
+        return next;
+      },
+      { replace: true },
+    );
+    toast.info("Checkout cancelled — you haven't been charged. Pick a plan to continue.", {
+      id: "checkout-cancelled",
+    });
+    // Once per mount, keyed on the latch alone.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resumeAtPlan]);
 
   const [formData, setFormData] = useState({
     firstName: "",
@@ -86,7 +103,7 @@ const Onboarding = () => {
 
       const { data } = await supabase
         .from("profiles")
-        .select("first_name, last_name, given_name, full_name, company, onboarding_completed")
+        .select("first_name, last_name, given_name, full_name, company, role, onboarding_completed")
         .eq("id", user.id)
         .single();
 
@@ -94,8 +111,13 @@ const Onboarding = () => {
         // Backfill the durable cache so a fully-onboarded user who lands here
         // (e.g., bookmark to /onboarding) gets their guard bypass restored.
         markOnboardedCached(user.id);
-        navigate("/dashboard", { replace: true });
-        return;
+        if (!resumeAtPlan) {
+          navigate("/dashboard", { replace: true });
+          return;
+        }
+        // A cancelled checkout lands here already onboarded. Fall through so
+        // the saved profile (role included) is reloaded into the form —
+        // "Continue with Free" re-saves it, and would otherwise blank fields.
       }
 
       if (data) {
@@ -112,6 +134,7 @@ const Onboarding = () => {
           firstName: firstName || prev.firstName,
           lastName: lastName || prev.lastName,
           preferredName: data.given_name || prev.preferredName,
+          role: data.role || prev.role,
           company: data.company || prev.company,
         }));
       }
@@ -209,6 +232,7 @@ const Onboarding = () => {
       return;
     }
     if (user) markOnboardedCached(user.id);
+    clearPendingPlan(user?.id);
     setCurrentStep(4);
   };
 
@@ -223,6 +247,8 @@ const Onboarding = () => {
       return;
     }
     if (user) markOnboardedCached(user.id);
+    // An explicit Free choice ends any "finish upgrading" nudge.
+    clearPendingPlan(user?.id);
     setCurrentStep(4);
   };
 
@@ -238,13 +264,20 @@ const Onboarding = () => {
     }
     if (user) markOnboardedCached(user.id);
     try {
+      const planParam: CheckoutPlan = plan === "annual" ? "basic_annual" : "basic_monthly";
       const url = await createCheckout({
-        plan: plan === "annual" ? "basic_annual" : "basic_monthly",
+        plan: planParam,
         cancel_path: "/onboarding?upgrade=cancelled",
         // success_path stays default → /profile?stripe_session_id=...&welcome=true
       });
+      // Remember the choice so an abandoned checkout (Back, or a closed tab)
+      // can be finished from the dashboard or Billing later.
+      if (user) stashPendingPlan(user.id, planParam);
       window.location.href = url;
     } catch (e) {
+      // Already subscribed (they're onboarded by now, so leaving the wizard
+      // for the portal is fine): the handler explains and opens it.
+      if (await handleConflict(e)) return;
       toast.error("Couldn't start checkout — please try again from Billing");
       console.error("createCheckout failed:", e);
     }

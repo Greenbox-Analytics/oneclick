@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,8 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Loader2, Sun, Moon, HelpCircle, Sparkles } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
+import { useLocation, useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -27,12 +26,14 @@ import { ResourceLimitsCard } from "@/components/billing/ResourceLimitsCard";
 import { IntegrationsCard } from "@/components/billing/IntegrationsCard";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import { useTopupReturn } from "@/hooks/useTopupReturn";
-import { useAnalytics, type Plan } from "@/hooks/useAnalytics";
-import { peekCachedAnalyticsContext, refreshAnalyticsContext } from "@/hooks/useAnalyticsContext";
+import { useCheckoutReturn } from "@/hooks/useCheckoutReturn";
+import { usePortalReturn } from "@/hooks/usePortalReturn";
+import { peekCachedAnalyticsContext } from "@/hooks/useAnalyticsContext";
 import { useArtistsList } from "@/hooks/useArtistsList";
 import { useProjectsList } from "@/hooks/useProjectsList";
 import { useBoards } from "@/hooks/useBoards";
-import { isPaidTier, tierLabel } from "@/lib/tiers";
+import { tierLabel } from "@/lib/tiers";
+import { fmtDate, fmtDaysLeft } from "@/lib/utils";
 
 const formatPeriodEnd = (iso: string): string =>
   new Date(iso).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
@@ -150,21 +151,24 @@ const Profile = () => {
   // ---- Ported from the retired /subscription page (merged into Profile) ----
 
   // Post-Checkout landing: Stripe's success URL returns here with
-  // ?welcome=true&stripe_session_id=... — poll entitlements until the webhook
-  // lands, fire checkout_completed once, then clean the URL.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const stripeSessionId = searchParams.get("stripe_session_id");
-  const welcome = searchParams.get("welcome") === "true";
-  const [isPolling, setIsPolling] = useState(false);
-  const queryClient = useQueryClient();
-  const { captureCheckoutCompleted } = useAnalytics();
-  const checkoutCompletedFiredRef = useRef(false);
+  // ?welcome=true&stripe_session_id=... — the hook polls entitlements until
+  // the webhook lands, fires checkout_completed once, cleans the URL, and
+  // drives the "Activating your subscription…" overlay below.
+  const { activating } = useCheckoutReturn();
+
+  // The Customer Portal returns to ?portal=canceled (its cancel flow, the
+  // moment the user confirms) or ?portal=return (the Portal home's link) —
+  // the hook refetches until the cancel webhook lands and drives the
+  // "Updating your plan…" overlay for the former.
+  const { syncing } = usePortalReturn();
 
   // A credit purchase returns to ?topup=success|canceled — a separate Stripe
-  // round trip from the subscription one handled below.
+  // round trip from the subscription one.
   useTopupReturn();
 
-  const isPaid = isPaidTier(ent?.tier);
+  const periodEnd = ent?.subscription?.currentPeriodEnd ?? null;
+  const endsIn = ent?.subscription?.cancelAtPeriodEnd ? fmtDaysLeft(periodEnd) : "";
+
   const analyticsCtx = user?.id ? peekCachedAnalyticsContext(user.id) : null;
   const isTester = analyticsCtx?.is_tester === true;
   const testerExpiresAt = analyticsCtx?.tester_expires_at ?? null;
@@ -197,62 +201,17 @@ const Profile = () => {
     return () => cancelAnimationFrame(raf);
   }, [hash]);
 
-  useEffect(() => {
-    if (!welcome || !stripeSessionId) return;
-    if (isPaid) {
-      if (!checkoutCompletedFiredRef.current) {
-        checkoutCompletedFiredRef.current = true;
-        const completedPlan = (ent?.subscription?.planPeriod as Plan | undefined) ?? "monthly";
-        captureCheckoutCompleted(completedPlan);
-      }
-      // Refresh the analytics-context cache so banners reading the 5-min
-      // localStorage cache don't keep showing "you're on Free" post-upgrade.
-      if (user?.id) {
-        void refreshAnalyticsContext(user.id, user.email);
-      }
-      // Drop only the Stripe return params, and `replace` so Back doesn't
-      // land on the checkout-return URL and replay the welcome toast.
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.delete("welcome");
-          next.delete("stripe_session_id");
-          return next;
-        },
-        { replace: true },
-      );
-      toast({ title: `Welcome to ${tierLabel(ent?.tier)}!`, description: "Your subscription is active." });
-      return;
-    }
-    setIsPolling(true);
-    const interval = setInterval(() => {
-      queryClient.invalidateQueries({ queryKey: ["entitlements"] });
-    }, 1000);
-    const timeout = setTimeout(() => {
-      clearInterval(interval);
-      setIsPolling(false);
-      toast({
-        title: "Subscription is processing",
-        description: "Refresh in a moment if it doesn't show up.",
-      });
-    }, 10_000);
-    return () => {
-      clearInterval(interval);
-      clearTimeout(timeout);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [welcome, stripeSessionId, isPaid]);
-
   return (
     <div className="min-h-screen bg-background">
-      {/* Post-Checkout polling overlay (returning from Stripe) */}
-      {isPolling && (
+      {/* Polling overlay while a Stripe webhook is in flight: returning from
+          Checkout (activating) or from the Portal's cancel flow (syncing) */}
+      {(activating || syncing) && (
         <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur flex items-center justify-center">
           <div className="text-center">
             <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-3" />
             {/* Tier isn't known yet (webhook hasn't landed), so this can't
                 name the plan without guessing. */}
-            <div className="text-sm">Activating your subscription…</div>
+            <div className="text-sm">{activating ? "Activating your subscription…" : "Updating your plan…"}</div>
           </div>
         </div>
       )}
@@ -288,13 +247,13 @@ const Profile = () => {
         )}
 
         {/* Cancel-scheduled banner */}
-        {ent?.subscription?.cancelAtPeriodEnd && ent.subscription.currentPeriodEnd && (
+        {ent?.subscription?.cancelAtPeriodEnd && periodEnd && (
           <div className="mb-6 rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
-            <div className="font-medium text-sm">Subscription scheduled to end</div>
+            <div className="font-medium text-sm">Your plan is set to end</div>
             <div className="text-sm text-muted-foreground mt-1">
-              Your {tierLabel(ent?.tier)} access ends on{" "}
-              {new Date(ent.subscription.currentPeriodEnd).toLocaleDateString()}. Reactivate via Manage
-              subscription if you change your mind.
+              Your {tierLabel(ent?.tier)} plan ends on {fmtDate(periodEnd)}
+              {endsIn ? ` (${endsIn})` : ""}. You keep full access until then. Changed your mind? You can
+              reactivate from Manage subscription.
             </div>
           </div>
         )}
