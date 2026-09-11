@@ -1767,7 +1767,7 @@ function RoyaltyStep({
                   })}
                 </div>
                 <p className="mt-1.5 text-[11px] text-muted-foreground">
-                  Select every contract that covers this work's splits — you can pick more than one.
+                  Select every contract that covers this work's splits. You can pick more than one.
                 </p>
                 </>
               )}
