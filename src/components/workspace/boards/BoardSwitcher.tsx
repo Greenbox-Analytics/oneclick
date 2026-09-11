@@ -96,8 +96,8 @@ export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherP
   // narrow who sees it, even as a plain team member.
   const canManageBoard =
     teamId == null || activeTeam?.my_role === "admin" || selectedBoard?.owner_id === user?.id;
-  // The empty state is a TEAM concept only. Personal keeps boardId undefined = the
-  // personal-boards union (today's behavior), so it never shows "No boards yet".
+  // The empty state is a TEAM concept only: the personal listing always contains
+  // at least the "Personal" board (the backend ensures it before listing).
   const hasNoBoards =
     teamId !== null && !boardsLoading && Array.isArray(boards) && boards.length === 0;
 
@@ -115,19 +115,21 @@ export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherP
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamIsStale, scopingEnabled]);
 
-  // In a TEAM context, auto-select the first board once the list resolves, and drop a
-  // stale selection (e.g. after archiving the active board) that is no longer present.
+  // Auto-select a board once the list resolves, and drop a stale selection (e.g.
+  // after archiving the active board) that is no longer present.
   // Gated on !boardsFetching so we never re-select from the STALE cached list during
   // the background refetch an archive invalidation kicks off — only from fresh data.
   // Emits only when the computed selection differs from the prop, so it cannot loop.
-  // In Personal (teamId === null) we do NOT auto-select — boardId stays undefined so
-  // KanbanBoard renders the personal-boards union (no forced remount / narrowing).
+  // A team defaults to its first board. Personal defaults to the artistless
+  // "Personal" board (artist boards are named after their artist and sort by
+  // position, so "first" would be whichever artist board came first).
   useEffect(() => {
-    if (teamId === null || teamIsStale) return;
+    if (teamIsStale) return;
     if (boardsLoading || boardsFetching || !boards) return;
     if (boardId && boards.some((b) => b.id === boardId)) return; // current selection still valid
     if (boards.length > 0) {
-      onBoardChange(boards[0].id, teamId);
+      const fallback = teamId === null ? boards.find((b) => !b.artist_id) : undefined;
+      onBoardChange((fallback ?? boards[0]).id, teamId);
     } else if (boardId) {
       // Selection points at a board that's gone from the (now empty) list — drop it.
       onBoardChange(undefined, teamId);
@@ -224,7 +226,7 @@ export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherP
       ) : (
         <Select value={boardId ?? ""} onValueChange={handleBoardChange}>
           <SelectTrigger className="w-[200px]" aria-label="Select board">
-            <SelectValue placeholder={teamId === null ? "All personal boards" : "Select board"} />
+            <SelectValue placeholder="Select board" />
           </SelectTrigger>
           <SelectContent>
             {(boards ?? []).map((board) => (

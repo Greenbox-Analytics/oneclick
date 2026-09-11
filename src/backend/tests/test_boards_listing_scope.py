@@ -160,22 +160,39 @@ def _run_list(rec, **kwargs):
     return asyncio.run(service.list_boards(_db(rec), TEST_USER_ID, **kwargs))
 
 
+# ("boards", "id") is ensure_personal_board's lookup — the personal listing
+# guarantees the "Personal" board exists before it lists, so the mapping needs
+# the row or the mock falls into ensure's lost-the-race re-read on empty data.
+_PERSONAL_LOOKUP = {("boards", "id"): [{"id": MY_BOARD}]}
+
+
+def test_list_boards_personal_branch_ensures_the_personal_board():
+    """The switcher defaults to the artistless "Personal" board, so the personal
+    listing must never come back without one — a brand-new user has no boards
+    at all until something creates it. Team listings don't touch it."""
+    rec = _Recorder({("boards", "*"): [{"id": MY_BOARD}], **_PERSONAL_LOOKUP})
+    _run_list(rec, scope=Scope.personal())
+
+    assert ("boards", "id") in rec.requested
+    assert ("is_", ("artist_id", "null")) in rec.board_filters
+
+
 def test_list_boards_personal_scope_filters_the_filing_label():
-    rec = _Recorder({("boards", "*"): [{"id": MY_BOARD}]})
+    rec = _Recorder({("boards", "*"): [{"id": MY_BOARD}], **_PERSONAL_LOOKUP})
     _run_list(rec, scope=Scope.personal())
 
     assert ("is_", ("org_id", "null")) in rec.board_filters
 
 
 def test_list_boards_org_scope_filters_to_that_org():
-    rec = _Recorder({("boards", "*"): [{"id": MY_BOARD}]})
+    rec = _Recorder({("boards", "*"): [{"id": MY_BOARD}], **_PERSONAL_LOOKUP})
     _run_list(rec, scope=Scope.org(ORG_A))
 
     assert ("eq", ("org_id", ORG_A)) in rec.board_filters
 
 
 def test_list_boards_unscoped_does_not_filter():
-    rec = _Recorder({("boards", "*"): [{"id": MY_BOARD}]})
+    rec = _Recorder({("boards", "*"): [{"id": MY_BOARD}], **_PERSONAL_LOOKUP})
     _run_list(rec, scope=Scope.unscoped())
 
     assert not [f for f in rec.board_filters if f[1] and f[1][0] == "org_id"]

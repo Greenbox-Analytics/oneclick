@@ -1268,6 +1268,9 @@ async def list_boards(
         if team_id not in artist_access.live_org_ids(db, user_id):
             raise PermissionError("Not a member of this team")
         return _visible_org_boards(db, user_id, [team_id])
+    # The switcher defaults to the artistless "Personal" board, so the personal
+    # listing guarantees it exists — a brand-new user has no boards until then.
+    ensure_personal_board(db, user_id, None, scope)
     q = db.table("boards").select("*").eq("owner_id", user_id).is_("team_id", "null")
     if scope is not None and scope.active:
         q = q.eq("org_id", scope.org_id) if scope.org_id else q.is_("org_id", "null")

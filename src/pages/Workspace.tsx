@@ -251,9 +251,9 @@ const Workspace = () => {
                 trip to the critical path. Kept mounted, all four requests leave
                 together and the single spinner just covers the slowest.
 
-                No wasted fetch in a team context: KanbanBoard renders null
-                there until a board is picked, which is the one case where the
-                board id genuinely depends on the list. */}
+                KanbanBoard renders null until a board is picked, since the
+                board id depends on the list in every context (Personal
+                defaults to the "Personal" board once the list is in). */}
             <div className={boardsLoading ? "hidden" : undefined}>
               <BoardSwitcher
                 teamId={selectedTeamId}
@@ -263,11 +263,12 @@ const Workspace = () => {
                   setSelectedTeamId(t);
                 }}
               />
-              {/* Under a team context with no board selected, don't fall through to the
-                  personal-boards union — the switcher shows its "No boards yet" state instead. */}
-              {selectedTeamId && !selectedBoardId ? null : (
+              {/* No board selected yet (list still resolving, or a team with no
+                  boards): render nothing rather than the personal-boards union —
+                  the switcher auto-selects, or shows its "No boards yet" state. */}
+              {!selectedBoardId ? null : (
                 <KanbanBoard
-                  key={selectedBoardId ?? "personal"}
+                  key={selectedBoardId}
                   boardId={selectedBoardId}
                   teamId={selectedTeamId}
                   initialSelectedTaskId={initialTaskId}
