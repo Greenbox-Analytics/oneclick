@@ -6,8 +6,19 @@
 # Usage:
 #   GCP_PROJECT_ID=msanii-484501 \
 #   SERVICE=msanii-api-dev \
-#   DOMAIN=api-dev.msanii.com \
+#   DOMAIN=api-dev.msanii-beta.com \
 #     ./scripts/setup-api-load-balancer.sh
+#
+# DOMAIN takes a comma-separated LIST, and re-running with an extra name adds
+# it without disturbing the ones already served:
+#
+#   DOMAIN=api-dev.msanii-beta.com,api-dev.remediio.com.ai ...
+#
+# That is the rebrand path. One LB, one IP, one backend; each hostname gets its
+# own DNS authorization, certificate and certificate-map entry, so both answer
+# at once and partners migrate on their own schedule instead of on a flag day.
+# Retire the old name later by dropping it from DOMAIN and deleting its map
+# entry — the cert map is the only thing that decides which hosts are served.
 #
 # Optional:
 #   REGION=northamerica-northeast2   # must match the Cloud Run service
@@ -69,7 +80,8 @@ set -euo pipefail
 
 PROJECT_ID="${GCP_PROJECT_ID:?Set GCP_PROJECT_ID=your-gcp-project}"
 SERVICE="${SERVICE:?Set SERVICE=msanii-api-dev (the Cloud Run service)}"
-DOMAIN="${DOMAIN:?Set DOMAIN=api-dev.example.com (the hostname partners will call)}"
+DOMAIN="${DOMAIN:?Set DOMAIN=api-dev.example.com (comma-separated for more than one)}"
+IFS=',' read -r -a DOMAINS <<<"${DOMAIN// /}"
 REGION="${REGION:-northamerica-northeast2}"
 PREFIX="${PREFIX:-$SERVICE}"
 CLOUD_ARMOR="${CLOUD_ARMOR:-false}"
@@ -81,17 +93,14 @@ HTTPS_PROXY="${PREFIX}-https-proxy"
 HTTP_PROXY="${PREFIX}-http-proxy"
 REDIRECT_MAP="${PREFIX}-redirect"
 IP_NAME="${PREFIX}-ip"
-CERT="${PREFIX}-cert"
-DNS_AUTH="${PREFIX}-dnsauth"
 CERT_MAP="${PREFIX}-certmap"
-CERT_MAP_ENTRY="${PREFIX}-certmap-entry"
 ARMOR="${PREFIX}-armor"
 
 gcloud config set project "$PROJECT_ID" >/dev/null
 
 echo "Project:  $PROJECT_ID"
 echo "Service:  $SERVICE ($REGION)"
-echo "Domain:   $DOMAIN"
+echo "Domains:  ${DOMAINS[*]}"
 echo
 
 # `gcloud ... describe` is the existence test throughout; a miss is expected,
@@ -142,20 +151,29 @@ else
   exit 1
 fi
 
-echo "==> 5/9  Certificate via Certificate Manager (DNS authorization)"
-have gcloud certificate-manager dns-authorizations describe "$DNS_AUTH" ||
-  gcloud certificate-manager dns-authorizations create "$DNS_AUTH" --domain="$DOMAIN"
-have gcloud certificate-manager certificates describe "$CERT" ||
-  gcloud certificate-manager certificates create "$CERT" \
-    --domains="$DOMAIN" \
-    --dns-authorizations="$DNS_AUTH"
+echo "==> 5/9  Certificates via Certificate Manager (DNS authorization)"
+# One cert per hostname rather than one SAN cert covering all of them: a SAN
+# cert fails to issue or renew as a WHOLE if any single domain's authorization
+# is not satisfied, so adding a not-yet-delegated rebrand domain would take the
+# live one down with it. Separate certs fail independently.
 have gcloud certificate-manager maps describe "$CERT_MAP" ||
   gcloud certificate-manager maps create "$CERT_MAP"
-have gcloud certificate-manager maps entries describe "$CERT_MAP_ENTRY" --map="$CERT_MAP" ||
-  gcloud certificate-manager maps entries create "$CERT_MAP_ENTRY" \
-    --map="$CERT_MAP" \
-    --certificates="$CERT" \
-    --hostname="$DOMAIN"
+for d in "${DOMAINS[@]}"; do
+  # Resource names cannot contain dots.
+  slug="${d//./-}"
+  echo "    $d"
+  have gcloud certificate-manager dns-authorizations describe "${PREFIX}-dnsauth-${slug}" ||
+    gcloud certificate-manager dns-authorizations create "${PREFIX}-dnsauth-${slug}" --domain="$d"
+  have gcloud certificate-manager certificates describe "${PREFIX}-cert-${slug}" ||
+    gcloud certificate-manager certificates create "${PREFIX}-cert-${slug}" \
+      --domains="$d" \
+      --dns-authorizations="${PREFIX}-dnsauth-${slug}"
+  have gcloud certificate-manager maps entries describe "${PREFIX}-entry-${slug}" --map="$CERT_MAP" ||
+    gcloud certificate-manager maps entries create "${PREFIX}-entry-${slug}" \
+      --map="$CERT_MAP" \
+      --certificates="${PREFIX}-cert-${slug}" \
+      --hostname="$d"
+done
 
 echo "==> 6/9  URL map + HTTPS proxy"
 # Retried: a backend service reports "not ready" for a few seconds after a NEG
@@ -231,33 +249,39 @@ fi
 
 echo
 echo "==> 9/9  What you still have to do by hand"
-DNS_RECORD="$(gcloud certificate-manager dns-authorizations describe "$DNS_AUTH" \
-  --format='value(dnsResourceRecord.name,dnsResourceRecord.data)')"
+PRIMARY="${DOMAINS[0]}"
 cat <<EOF
 
-  1. DNS — add BOTH records at your DNS provider:
+  1. DNS — for EACH hostname, two records:
+EOF
+for d in "${DOMAINS[@]}"; do
+  slug="${d//./-}"
+  rec="$(gcloud certificate-manager dns-authorizations describe "${PREFIX}-dnsauth-${slug}" \
+    --format='value(dnsResourceRecord.name,dnsResourceRecord.data)')"
+  cat <<EOF
 
-     a) The certificate challenge (CNAME). Leave it in place forever; renewals
-        re-validate against it:
-          $DNS_RECORD
+     $d
+       challenge  CNAME  $rec
+       hostname   A      $d -> $LB_IP
+EOF
+done
+cat <<EOF
 
-     b) The hostname itself:
-          $DOMAIN   A   $LB_IP
+     Leave the CNAMEs in place forever — renewals re-validate against them.
+     Behind Cloudflare the proxy (orange cloud) may be ON from the start: the
+     cert validates through the CNAME, not the A record. SSL mode "Full
+     (strict)".
 
-        Behind Cloudflare: create the same A record and you may leave the proxy
-        (orange cloud) ON — the cert validates through (a), not through this
-        record. Use SSL mode "Full (strict)".
-
-  2. Wait for the certificate. Minutes to ~an hour:
-       gcloud certificate-manager certificates describe $CERT \\
-         --format='value(managed.state, managed.domainStatus)'
-     Proceed only at ACTIVE.
+  2. Wait for each certificate. Minutes to ~an hour:
+       gcloud certificate-manager certificates list --format='table(name, managed.state)'
+     Proceed at ACTIVE. Certs are per hostname and fail independently, so a
+     domain you have not delegated yet cannot hold up one that is live.
 
   3. Prove the LB actually serves the app:
-       curl -fsS https://$DOMAIN/health
+       curl -fsS https://${PRIMARY}/health
 
   4. ONLY THEN lock the service down. Set the GitHub secret so deploys keep it
-     that way (DEV_API_HOSTNAME / PROD_API_HOSTNAME = $DOMAIN), and flip the
+     that way (DEV_API_HOSTNAME / PROD_API_HOSTNAME = $PRIMARY), and flip the
      live service now rather than waiting for the next deploy:
        gcloud run services update $SERVICE --region $REGION \\
          --ingress internal-and-cloud-load-balancing
@@ -267,5 +291,12 @@ cat <<EOF
      gate, IAM is a separate one, and the LB does not authenticate as a
      principal. That is also why the tag-conditional DRS exception at the top
      of this script is needed either way.
+
+  5. AFTER DNS is live, verify what the request log records as the client IP.
+     partner_api.service.client_ip takes the LAST X-Forwarded-For hop; an ALB
+     adds one, so the real client may now be second-to-last. Curl from a known
+     address and read partner_api_requests.client_ip. If it shows the load
+     balancer, that is a one-line fix — and until it is right, the leaked-key
+     forensics record the LB for every request.
 
 EOF
